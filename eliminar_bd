@@ -1,0 +1,53 @@
+import sqlite3
+import os
+
+DB_FILENAME = 'quimo.db'
+TABLES_TO_CHECK = [
+    ('productos', 'id_producto', 'nombre_producto'),
+    ('materiasprimas', 'id_mp', 'nombre_mp'),
+    ('productosreventa', 'id_prev', 'nombre_prev')
+]
+
+def diagnose_database():
+    """
+    Busca y muestra filas con nombres potencialmente problemáticos (muy cortos).
+    """
+    db_path = os.path.abspath(DB_FILENAME)
+    if not os.path.exists(db_path):
+        print(f"Error: No se encontró '{db_path}'")
+        return
+
+    print(f"Iniciando diagnóstico de '{db_path}'...")
+    connection = None
+    try:
+        connection = sqlite3.connect(db_path)
+        cursor = connection.cursor()
+        
+        found_issues = 0
+        for table, id_col, name_col in TABLES_TO_CHECK:
+            # Buscamos nombres que no estén vacíos pero que tengan 1 o 2 caracteres de longitud
+            query = f"SELECT {id_col}, {name_col} FROM {table} WHERE LENGTH(TRIM({name_col})) > 0 AND LENGTH(TRIM({name_col})) < 3"
+            
+            cursor.execute(query)
+            results = cursor.fetchall()
+            
+            if results:
+                print(f"\n--- Problemas potenciales encontrados en la tabla '{table}' ---")
+                for item_id, name in results:
+                    # repr(name) nos mostrará los caracteres invisibles como \x00
+                    print(f"  ID: {item_id}, Nombre: {repr(name)}")
+                    found_issues += 1
+        
+        if found_issues == 0:
+            print("\nDiagnóstico finalizado: No se encontraron nombres cortos o sospechosos.")
+        else:
+            print(f"\nDiagnóstico finalizado. Se encontraron {found_issues} problemas potenciales.")
+
+    except sqlite3.Error as e:
+        print(f"Error en la base de datos: {e}")
+    finally:
+        if connection:
+            connection.close()
+
+if __name__ == "__main__":
+    diagnose_database()

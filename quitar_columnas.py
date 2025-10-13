@@ -1,169 +1,104 @@
-# Borrar todas las columnas de la db
-import sqlite3
+from sqlalchemy import create_engine, text
 
-def eliminar_columnas(nombre_tabla, columnas_a_eliminar):
-    try:
-        conn = sqlite3.connect("inventario.db")
-        cursor = conn.cursor()
+# --- Configura tu conexión ---
+# Ejemplo SQLite: "sqlite:///tu_base_de_datos.db"
+# Ejemplo PostgreSQL: "postgresql+psycopg2://user:pass@localhost:5432/tu_bd"
+engine = create_engine("sqlite:///quimo.db")  
 
-        # Obtener todas las columnas actuales
-        cursor.execute(f"PRAGMA table_info({nombre_tabla})")
-        columnas_info = cursor.fetchall()
-        columnas_actuales = [col[1] for col in columnas_info]
+# --- Lista de productos a verificar ---
+lista_productos = [
+    "AMINA JB", "DESENGRAS BIO 78", "AMINA JAF", "ENZIM REM", "ENZIM PEL", "ENZIM RND",
+    "DESLIZANTE", "IMPEOIL SOFT", "IMPEACRIL AR", "IMPEHUM HB", "BACTERICIDA 80",
+    "BACTERICIDA 60", "IMPEFAST FM", "SECUESTRON CC", "IMPEFAST GM", "RECURTAN JF 22",
+    "IMPEFAST NP", "IMPEFAST NP C", "RECURTAN JF 95", "SULPHODEP 13", "DESENGRAS BIO 78 QC",
+    "QUIMO OXILIFT", "DESENGRAS 05", "DESENGRAS PLUS", "PINOL", "PINOL CONCENTRADO",
+    "FRICCION", "SARRIGEL", "MÁS NEGRO", "ACEITE PARA MOP", "CLORO CLEAN", 
+    "CLORO CLEAN 8 %", "CLORO CLEAN 6 %", "JABÓN PARA TRASTES LÍQUIDO LIMÓN",
+    "DETERGENTE LÍQUIDO PARA ROPA DE COLOR", "DETERCON", "IMPEFAST SP", "FANTÁSTICO PRIMAVERA",
+    "FANTÁSTICO LIMÓN",
+"FANTÁSTICO LAVANDA",
+"FANTÁSTICO CANELA",
+"FANTÁSTICO GREEN BAMBÚ",
+"FANTÁSTICO CITRONELA",
+"FANTÁSTICO MENTA",
+"FANTÁSTICO TORONJA",
+"FASCINANTE PRIMAVERA",
+"FASCINANTE LIMÓN",
+"FASCINANTE LAVANDA",
+"FASCINANTE CANELA",
+"FASCINANTE GREEN BAMBÚ",
+"FASCINANTE CITRONELA",
+"FASCINANTE MENTA",
+"FASCINANTE TORONJA",
+"SHAMPOO CON CERA",
+"GEL ANTIBACTERIAL",
+"SOSA LÍQUIDA",
+"DESENGRAS 2000",
+"JABÓN QUIMO LÍQUIDO",
+"FINISH",
+"FINISH RECARGADO",
+"TIPO VANISH LÍQUIDO",
+"FINATELA FLOR DE LUNA",
+"FINATELA PRIMAVERA",
+"AROMATIZANTE CITRONELA",
+"AROMATIZANTE 500 mL",
+"AROMATIZANTE RECARGADO",  
+"VINIL INTERIORES",
+"VINIL PARA LLANTAS",
+"FRESH GLASS",
+"MÁS COLOR",
+"PINOL VERDE",
+"CONCENTRADO FANTÁSTICO LIMÓN",
+"CONCENTRADO FANTÁSTICO LAVANDA",
+"CONCENTRADO FANTÁSTICO PRIMAVERA",
+"CONCENTRADO FANTÁSTICO CANELA",
+"CONCENTRADO FANTÁSTICO CITRONELA",
+"CONCENTRADO FANTÁSTICO MENTA",
+"CONCENTRADO FANTÁSTICO GREEN BAMBÚ",
+"CONCENTRADO FANTÁSTICO TORONJA",
+"CONCENTRADO FASCINANTE LIMÓN",
+"CONCENTRADO FASCINANTE LAVANDA",
+"CONCENTRADO FASCINANTE PRIMAVERA",
+"CONCENTRADO FASCINANTE CANELA",
+"CONCENTRADO FASCINANTE CITRONELA",
+"CONCENTRADO FASCINANTE MENTA",
+"CONCENTRADO FASCINANTE GREEN BAMBÚ",
+"CONCENTRADO FASCINANTE TORONJA",
+"FARAÓN",
+"FULMINANTE",
+"SUAVIZANTE DE ROPA",
+"VELO ROSITA",
+"JABÓN BARRA 400 g",
+"JABÓN BARRA 180 G",
+"JABÓN RAYADO 250 g",
+"JABÓN RAYADO 1 Kg",
+"JABÓN RAYADO 500 g",
+"SAPONE DURAZNO",
+"SAPONE MENTA",
+"SAPONE MANZANA",
+"SAPONE MARACUYÁ",
+"SAPONE PALMOLIVE",
+"SAPONE DOVE",
+"SAPONE COCO",
+"SAPONE GREEN BAMBU"
+]
+with engine.connect() as conn:
+    # --- Traer productos existentes ---
+    result = conn.execute(text("SELECT nombre_producto FROM productos"))
+    productos_bd = [row[0].strip().upper() for row in result]
 
-        # Filtrar columnas a mantener
-        columnas_nuevas = [col for col in columnas_actuales if col not in columnas_a_eliminar]
+    # --- Registrar los faltantes ---
+    for producto in lista_productos:
+        if producto.upper() not in productos_bd:
+            conn.execute(
+                text(
+                    "INSERT INTO productos "
+                    "(nombre_producto, unidad_medida_producto, area_producto, cantidad_producto) "
+                    "VALUES (:nombre, :unidad, :area, :cantidad)"
+                ),
+                {"nombre": producto, "unidad": "KG", "area": "Quimo", "cantidad": 0}
+            )
+            print(f"Registrado: {producto}")
 
-        if not columnas_nuevas:
-            print("❌ No puedes eliminar todas las columnas.")
-            return
+print("✅ Todos los productos faltantes fueron registrados con área 'Quimo' y cantidad 0.")
 
-        columnas_nuevas_str = ", ".join(columnas_nuevas)
-
-        # Crear nueva tabla con las columnas a mantener
-        columnas_definicion = []
-        for col in columnas_info:
-            if col[1] in columnas_nuevas:
-                columnas_definicion.append(f"{col[1]} {col[2]}")
-        columnas_definicion_str = ", ".join(columnas_definicion)
-
-        nombre_temporal = f"{nombre_tabla}_tmp"
-
-        cursor.execute(f"CREATE TABLE {nombre_temporal} ({columnas_definicion_str})")
-        cursor.execute(f"INSERT INTO {nombre_temporal} SELECT {columnas_nuevas_str} FROM {nombre_tabla}")
-        cursor.execute(f"DROP TABLE {nombre_tabla}")
-        cursor.execute(f"ALTER TABLE {nombre_temporal} RENAME TO {nombre_tabla}")
-
-        conn.commit()
-        conn.close()
-        print(f"✅ Columnas {columnas_a_eliminar} eliminadas correctamente de la tabla '{nombre_tabla}'.")
-
-    except Exception as e:
-        print(f"❌ Error al eliminar columnas: {e}")
-        
-    import sqlite3
-
-# Borrar columna especifica de la DB.
-def eliminar_columna(nombre_tabla, columnas_a_eliminar):
-    try:
-        conn = sqlite3.connect("inventario.db")
-        cursor = conn.cursor()
-
-        # Obtener todas las columnas actuales
-        cursor.execute(f"PRAGMA table_info({nombre_tabla})")
-        columnas_info = cursor.fetchall()
-        columnas_actuales = [col[1] for col in columnas_info]
-
-        # Filtrar columnas a mantener
-        columnas_nuevas = [col for col in columnas_actuales if col not in columnas_a_eliminar]
-
-        if not columnas_nuevas:
-            print("❌ No puedes eliminar todas las columnas.")
-            return
-
-        columnas_nuevas_str = ", ".join(columnas_nuevas)
-
-        # Crear nueva tabla con las columnas a mantener
-        columnas_definicion = []
-        for col in columnas_info:
-            if col[1] in columnas_nuevas:
-                columnas_definicion.append(f"{col[1]} {col[2]}")
-        columnas_definicion_str = ", ".join(columnas_definicion)
-
-        nombre_temporal = f"{nombre_tabla}_tmp"
-
-        cursor.execute(f"CREATE TABLE {nombre_temporal} ({columnas_definicion_str})")
-        cursor.execute(f"INSERT INTO {nombre_temporal} SELECT {columnas_nuevas_str} FROM {nombre_tabla}")
-        cursor.execute(f"DROP TABLE {nombre_tabla}")
-        cursor.execute(f"ALTER TABLE {nombre_temporal} RENAME TO {nombre_tabla}")
-
-        conn.commit()
-        conn.close()
-        print(f"✅ Columnas {columnas_a_eliminar} eliminadas correctamente de la tabla '{nombre_tabla}'.")
-
-    except Exception as e:
-        print(f"❌ Error al eliminar columnas: {e}")
-        
-# Limpiar datos de columnas especificas
-import sqlite3
-
-def limpiar_columnas(nombre_tabla, columnas_a_limpiar, usar_null=True):
-    try:
-        conn = sqlite3.connect("inventario.db")
-        cursor = conn.cursor()
-
-        # Verificar que las columnas existan
-        cursor.execute(f"PRAGMA table_info({nombre_tabla})")
-        columnas_info = [col[1] for col in cursor.fetchall()]
-        columnas_validas = [col for col in columnas_a_limpiar if col in columnas_info]
-
-        if not columnas_validas:
-            print("❌ Ninguna de las columnas especificadas existe en la tabla.")
-            return
-
-        # Construir consulta de actualización
-        valor = "NULL" if usar_null else "''"
-        set_clause = ", ".join([f"{col} = {valor}" for col in columnas_validas])
-        query = f"UPDATE {nombre_tabla} SET {set_clause}"
-        cursor.execute(query)
-
-        conn.commit()
-        conn.close()
-        print(f"✅ Columnas {columnas_validas} limpiadas correctamente en la tabla '{nombre_tabla}'.")
-    except Exception as e:
-        print(f"❌ Error al limpiar columnas: {e}")
-        
-# Predeterminar valores Nulos.
-import sqlite3
-
-def rellenar_nulos(nombre_tabla, valores_por_columna):
-    try:
-        conn = sqlite3.connect("inventario.db")
-        cursor = conn.cursor()
-
-        # Obtener columnas actuales de la tabla
-        cursor.execute(f"PRAGMA table_info({nombre_tabla})")
-        columnas_info = [col[1] for col in cursor.fetchall()]
-
-        # Filtrar columnas válidas
-        columnas_validas = {
-            col: valor for col, valor in valores_por_columna.items() if col in columnas_info
-        }
-
-        if not columnas_validas:
-            print("❌ Ninguna de las columnas especificadas existe en la tabla.")
-            return
-
-        for columna, valor in columnas_validas.items():
-            cursor.execute(f"UPDATE {nombre_tabla} SET {columna} = ? WHERE {columna} IS NULL", (valor,))
-            print(f"✅ Valores NULL en columna '{columna}' fueron reemplazados con: {valor}")
-
-        conn.commit()
-        conn.close()
-        print("✅ Todos los valores NULL han sido actualizados exitosamente.")
-
-    except Exception as e:
-        print(f"❌ Error al actualizar valores NULL: {e}")
-
-
-# Ejemplo de uso:
-if __name__ == "__main__":
-    tabla = "productos"
-    
-    # Borrar
-    #columnas_a_eliminar = ["REAL"]  # <-- modifica aquí las columnas a eliminar
-    #eliminar_columna(tabla, columnas_a_eliminar)
-    
-    # Limpiar
-    #columnas = ["existencia", "estatus", "precio"]  # <-- modifica aquí las columnas a limpiar
-    #limpiar_columnas(tabla, columnas, usar_null=True)  # usar_null=True para NULL, False para texto vacío
-    
-    # Predeterminar valores Nulos
-    # Define qué valor usar para reemplazar NULL en cada columna
-    valores_predeterminados = {
-        "existencia": 0,
-        "estatus": 0,
-        "precio": 0.0
-    }
-
-    rellenar_nulos(tabla, valores_predeterminados)

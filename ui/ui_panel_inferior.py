@@ -1,11 +1,11 @@
-# ui/ui_panel_inferior.py (VERSIÓN FINAL CON FECHA DE REGISTRO)
+# ui/ui_panel_inferior_redisenado.py (VERSIÓN CORREGIDA)
 
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QPushButton, QMessageBox, QHBoxLayout, QTabWidget,
-    QComboBox
+    QComboBox, QDialog, QFrame, QGroupBox, QSplitter, QScrollArea, QDateEdit
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QDate
 import pandas as pd
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
@@ -14,105 +14,180 @@ matplotlib.use('Qt5Agg')
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from sqlalchemy import text
+from .ui_deshacer_produccion import VentanaDeshacerProduccion
 
-class PanelInferior(QWidget):
-    def __init__(self, engine):
+
+class TarjetaMetrica(QFrame):
+    """Widget tipo tarjeta para mostrar métricas importantes"""
+    def __init__(self, titulo, valor, color_fondo="#f8f9fa", parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {color_fondo};
+                border-radius: 8px;
+                padding: 10px;
+                border: 1px solid #dee2e6;
+            }}
+        """)
+        
+        layout = QVBoxLayout(self)
+        self.titulo_label = QLabel(titulo)
+        self.titulo_label.setStyleSheet("font-weight: bold; color: #6c757d;")
+        self.valor_label = QLabel(valor)
+        self.valor_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #343a40;")
+        
+        layout.addWidget(self.titulo_label)
+        layout.addWidget(self.valor_label)
+        layout.addStretch()
+
+
+class PanelInferiorRedisenado(QWidget):
+    def __init__(self, engine, refrescar_tabla_principal_callback=None):
         super().__init__()
         self.engine = engine
+        self.refrescar_tabla_principal_callback = refrescar_tabla_principal_callback
         self.df_produccion = pd.DataFrame()
 
-        self.setLayout(QVBoxLayout())
+        # Layout principal con splitter para mayor flexibilidad
+        main_layout = QVBoxLayout(self)
+        self.splitter = QSplitter(Qt.Vertical)
+        main_layout.addWidget(self.splitter)
         
+        # --- Panel superior: Resumen y métricas ---
+        self.panel_superior = QWidget()
+        self.panel_superior_layout = QVBoxLayout(self.panel_superior)
+        
+        # Selector de período mejorado
+        periodo_group = QGroupBox("Período de Análisis")
+        periodo_layout = QHBoxLayout(periodo_group)
+        
+        periodo_layout.addWidget(QLabel("Desde:"))
+        self.date_desde = QDateEdit()
+        self.date_desde.setDate(QDate.currentDate().addDays(-7))
+        self.date_desde.setCalendarPopup(True)
+        periodo_layout.addWidget(self.date_desde)
+        
+        periodo_layout.addWidget(QLabel("Hasta:"))
+        self.date_hasta = QDateEdit()
+        self.date_hasta.setDate(QDate.currentDate())
+        self.date_hasta.setCalendarPopup(True)
+        periodo_layout.addWidget(self.date_hasta)
+        
+        self.btn_aplicar_fechas = QPushButton("Aplicar")
+        self.btn_aplicar_fechas.clicked.connect(self.cargar_datos_desde_db)
+        periodo_layout.addWidget(self.btn_aplicar_fechas)
+        
+        periodo_layout.addStretch()
+        
+        self.btn_exportar = QPushButton("📊 Exportar Excel")
+        self.btn_exportar.clicked.connect(self.exportar_a_excel)
+        periodo_layout.addWidget(self.btn_exportar)
+        
+        self.panel_superior_layout.addWidget(periodo_group)
+        
+        # Tarjetas de métricas
+        self.metricas_layout = QHBoxLayout()
+        self.metrica_produccion = TarjetaMetrica("Producción Total", "0.00", "#e3f2fd")
+        self.metrica_costo = TarjetaMetrica("Costo Total", "$0.00", "#ffebee")
+        self.metrica_venta = TarjetaMetrica("Venta Total", "$0.00", "#e8f5e9")
+        self.metrica_ganancia = TarjetaMetrica("Ganancia Total", "$0.00", "#fff3e0")
+        
+        self.metricas_layout.addWidget(self.metrica_produccion)
+        self.metricas_layout.addWidget(self.metrica_costo)
+        self.metricas_layout.addWidget(self.metrica_venta)
+        self.metricas_layout.addWidget(self.metrica_ganancia)
+        
+        self.panel_superior_layout.addLayout(self.metricas_layout)
+        self.splitter.addWidget(self.panel_superior)
+        
+        # --- Panel inferior: Tabs con detalles ---
         self.tabs = QTabWidget()
-        self.layout().addWidget(self.tabs)
+        self.splitter.addWidget(self.tabs)
+        self.splitter.setSizes([200, 600])
         
-        # --- Pestaña de Producción ---
+        # Pestaña de Producción
         self.tab_produccion = QWidget()
-        self.tabs.addTab(self.tab_produccion, "Producción")
+        self.tabs.addTab(self.tab_produccion, "📋 Producción Detallada")
         self.tab_produccion.setLayout(QVBoxLayout())
         
-        periodo_layout = QHBoxLayout()
-        periodo_layout.addWidget(QLabel("<b>Seleccionar Período de Análisis:</b>"))
-        self.combo_periodo = QComboBox()
-        self.combo_periodo.addItems(["Última semana", "Últimos 15 días", "Último mes", "Últimos 3 meses"])
-        self.combo_periodo.currentIndexChanged.connect(self.cargar_datos_desde_db)
-        periodo_layout.addWidget(self.combo_periodo)
-        periodo_layout.addStretch(1)
-        self.btn_exportar = QPushButton("Exportar a Excel")
-        periodo_layout.addWidget(self.btn_exportar)
-        self.tab_produccion.layout().addLayout(periodo_layout)
-
+        # Tabla de producción con scroll
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
         self.tabla_produccion = QTableWidget()
-        # <--- MODIFICACIÓN: Añadida la columna "Fecha" (total 13 columnas)
+        scroll_area.setWidget(self.tabla_produccion)
+        self.tab_produccion.layout().addWidget(scroll_area)
+        
         self.tabla_produccion.setColumnCount(13)
         self.tabla_produccion.setHorizontalHeaderLabels(
             ["Fecha", "Producto (unidad)", "L", "Ma", "Mi", "J", "V", "S", "D", "Total", "Costo Total", "Precio Venta", "Ganancia"]
         )
-        self.tabla_produccion.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch) # Columna de producto se estira
-        self.tab_produccion.layout().addWidget(self.tabla_produccion)
-
+        self.tabla_produccion.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        
+        # Botones de acción
         btn_layout = QHBoxLayout()
-        btn_cargar = QPushButton("Recargar Datos del Período")
+        btn_cargar = QPushButton("🔄 Recargar")
         btn_cargar.clicked.connect(self.cargar_datos_desde_db)
         btn_layout.addWidget(btn_cargar)
         
-        self.btn_calcular_costos = QPushButton("Calcular Costos y Ganancias (Detallado)")
-        btn_layout.addWidget(self.btn_calcular_costos)
+        self.btn_corte_semana = QPushButton("📅 Corte Semanal")
+        self.btn_corte_semana.setStyleSheet("background-color: #f5b041; color: black;")
+        self.btn_corte_semana.clicked.connect(self.realizar_corte_semana)
+        btn_layout.addWidget(self.btn_corte_semana)
+
+        self.btn_deshacer = QPushButton("↩️ Deshacer Producción")
+        self.btn_deshacer.setStyleSheet("background-color: #5dade2; color: white;")
+        self.btn_deshacer.clicked.connect(self.abrir_ventana_deshacer)
+        btn_layout.addWidget(self.btn_deshacer)
+
         self.tab_produccion.layout().addLayout(btn_layout)
-
-        self.label_total_produccion = QLabel("")
-        self.tab_produccion.layout().addWidget(self.label_total_produccion)
-
-        # --- Pestaña de Costos ---
-        self.tab_costos = QWidget()
-        self.tabs.addTab(self.tab_costos, "Costos")
-        # (El resto de las pestañas no necesitan cambios)
-        self.tab_costos.setLayout(QVBoxLayout())
-        self.tab_costos.layout().addWidget(QLabel("<b>Costos de Producción Detallados (Basado en Recetas)</b>"))
-        self.tabla_costos = QTableWidget()
-        self.tabla_costos.setColumnCount(9)
-        self.tabla_costos.setHorizontalHeaderLabels(
-            ["Materia Prima", "Costo Unitario", "L", "Ma", "Mi", "J", "V", "S", "D"]
-        )
-        self.tabla_costos.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.tab_costos.layout().addWidget(self.tabla_costos)
-        self.layout_totales_costos = QHBoxLayout()
-        self.label_total_costos = QLabel("")
-        self.label_total_ganancias = QLabel("")
-        self.label_margen_ganancia = QLabel("")
-        self.layout_totales_costos.addWidget(self.label_total_costos)
-        self.layout_totales_costos.addWidget(self.label_total_ganancias)
-        self.layout_totales_costos.addWidget(self.label_margen_ganancia)
-        self.tab_costos.layout().addLayout(self.layout_totales_costos)
-
-        # --- Pestaña de Análisis de Rentabilidad ---
-        self.tab_mensual = QWidget()
-        self.tabs.addTab(self.tab_mensual, "Análisis de Rentabilidad")
-        self.tab_mensual.setLayout(QVBoxLayout())
-        self.contenedor_principal = QHBoxLayout()
-        self.tab_mensual.layout().addLayout(self.contenedor_principal)
-        self.tabla_mensual = QTableWidget()
-        self.tabla_mensual.setColumnCount(5)
-        self.tabla_mensual.setHorizontalHeaderLabels(["Producto", "Costo Total", "Precio Venta", "Ganancia", "Margen (%)"])
-        self.tabla_mensual.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.contenedor_principal.addWidget(self.tabla_mensual)
-        self.contenedor_graficos = QVBoxLayout()
-        self.contenedor_principal.addLayout(self.contenedor_graficos)
-        self.grafico_costos = FigureCanvasQTAgg(Figure(figsize=(5, 4)))
-        self.ax_costos = self.grafico_costos.figure.subplots()
-        self.contenedor_graficos.addWidget(self.grafico_costos)
-        self.grafico_ganancias = FigureCanvasQTAgg(Figure(figsize=(5, 4)))
-        self.ax_ganancias = self.grafico_ganancias.figure.subplots()
-        self.contenedor_graficos.addWidget(self.grafico_ganancias)
         
-        self.recetas_df = None
-        self.materias_primas = None
-        
+        # Cargar datos iniciales
         self.cargar_datos_desde_db()
+
+    def realizar_corte_semana(self):
+        """
+        Marca todos los registros de producción abiertos como 'cerrados'.
+        """
+        confirm = QMessageBox.question(self, "Confirmar Corte",
+                                       "¿Está seguro de que desea cerrar la semana actual?\n"
+                                       "Esto reiniciará la vista de 'Última semana'. Esta acción no se puede deshacer.",
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if confirm == QMessageBox.StandardButton.No:
+            return
+
+        try:
+            with self.engine.connect() as conn:
+                with conn.begin() as trans:
+                    query = text("UPDATE produccion SET semana_cerrada = 1 WHERE semana_cerrada = 0")
+                    result = conn.execute(query)
+                    
+                    QMessageBox.information(self, "Éxito",
+                                            f"Corte de semana realizado.\n"
+                                            f"{result.rowcount} registros de producción han sido archivados.")
+            
+            # Recargamos los datos para que la vista se actualice
+            self.cargar_datos_desde_db()
+            if self.refrescar_tabla_principal_callback:
+                self.refrescar_tabla_principal_callback()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo realizar el corte de semana:\n{e}")
+
+    def abrir_ventana_deshacer(self):
+        """Abre la ventana de diálogo para seleccionar y deshacer una producción."""
+        dialogo = VentanaDeshacerProduccion(self.engine, self)
+        
+        if dialogo.exec_() == QDialog.Accepted:
+            print("Acción de deshacer completada. Refrescando datos...")
+            # Si la acción fue exitosa, recargamos todas las vistas
+            self.cargar_datos_desde_db()
+            if self.refrescar_tabla_principal_callback:
+                self.refrescar_tabla_principal_callback()
 
     def registrar_produccion_con_costo(self, producto_nombre, cantidad, area, costo):
         fecha_actual = datetime.now().date()
-        dias_semana = ["L", "Ma", "Mi", "J", "V", "S", "D"]
+        dias_semana = ["L", "Ma", "Mi", "J", "V"]
         dia_str = dias_semana[fecha_actual.weekday()]
         
         try:
@@ -121,7 +196,7 @@ class PanelInferior(QWidget):
                     query_id = text("SELECT id_producto FROM productos WHERE nombre_producto = :nombre")
                     result = conn.execute(query_id, {"nombre": producto_nombre}).fetchone()
                     if not result:
-                        QMessageBox.critical(self, "Error", f"No se encontró el producto '{producto_nombre}' en la base de datos.")
+                        QMessageBox.critical(self, "Error", f"No se encontró el producto '{producto_nombre}'.")
                         return
                     producto_id = result[0]
 
@@ -145,58 +220,65 @@ class PanelInferior(QWidget):
             QMessageBox.critical(self, "Error de Base de Datos", f"Error al registrar producción: {e}")
 
     def cargar_datos_desde_db(self):
+        """Carga los datos desde la base de datos según el período seleccionado"""
         try:
-            periodo = self.combo_periodo.currentText()
-            fecha_fin = datetime.now().date()
-            if periodo == "Última semana": fecha_inicio = fecha_fin - timedelta(days=7)
-            elif periodo == "Últimos 15 días": fecha_inicio = fecha_fin - timedelta(days=15)
-            elif periodo == "Último mes": fecha_inicio = fecha_fin - relativedelta(months=1)
-            else: fecha_inicio = fecha_fin - relativedelta(months=3)
+            fecha_desde = self.date_desde.date().toPyDate()
+            fecha_hasta = self.date_hasta.date().toPyDate()
             
             query = text("""
-            SELECT 
-                p.nombre_producto AS producto,
-                p.unidad_medida_producto AS unidad,
-                pr.dia,
-                pr.fecha,
-                pr.cantidad,
-                pr.costo,
-                pr.area
-            FROM produccion pr
-            JOIN productos p ON pr.producto_id = p.id_producto
-            WHERE pr.fecha BETWEEN :start_date AND :end_date
+                SELECT 
+                    p.nombre_producto AS producto, p.unidad_medida_producto AS unidad,
+                    pr.dia, pr.fecha, pr.cantidad, pr.costo, pr.area
+                FROM produccion pr
+                JOIN productos p ON pr.producto_id = p.id_producto
+                WHERE pr.fecha BETWEEN :start_date AND :end_date
+                AND pr.semana_cerrada = 0
             """)
             
-            self.df_produccion = pd.read_sql_query(query, self.engine, params={"start_date": fecha_inicio, "end_date": fecha_fin})
+            self.df_produccion = pd.read_sql_query(
+                query, self.engine, 
+                params={"start_date": fecha_desde, "end_date": fecha_hasta}
+            )
 
             if self.df_produccion.empty:
                 self.tabla_produccion.setRowCount(0)
-                self.label_total_produccion.setText("No hay datos para el período seleccionado.")
-                self.actualizar_analisis_mensual()
+                self.actualizar_metricas(0, 0, 0, 0)
                 return
 
             self.actualizar_vista_produccion()
-            self.actualizar_analisis_mensual()
 
         except Exception as e:
             QMessageBox.critical(self, "Error de Carga", f"No se pudo leer la base de datos: {e}")
 
+    def actualizar_metricas(self, total_produccion, total_costo, total_venta, total_ganancia):
+        """Actualiza las tarjetas de métricas con los nuevos valores"""
+        self.metrica_produccion.valor_label.setText(f"{total_produccion:,.2f}")
+        self.metrica_costo.valor_label.setText(f"${total_costo:,.2f}")
+        self.metrica_venta.valor_label.setText(f"${total_venta:,.2f}")
+        self.metrica_ganancia.valor_label.setText(f"${total_ganancia:,.2f}")
+
     def actualizar_vista_produccion(self):
+        """Actualiza la tabla de producción y las métricas"""
         df = self.df_produccion.copy()
-        df_pivot = df.pivot_table(index=["producto", "unidad"], columns="dia", values="cantidad", aggfunc='sum').fillna(0)
+        df_pivot = df.pivot_table(
+            index=["producto", "unidad"], 
+            columns="dia", 
+            values="cantidad", 
+            aggfunc='sum'
+        ).fillna(0)
         
-        # <--- MODIFICACIÓN: Agregamos la fecha al agrupar los totales
         df_totales = df.groupby(['producto', 'unidad']).agg(
             Total_Cantidad=('cantidad', 'sum'),
             Total_Costo=('costo', 'sum'),
-            Fecha=('fecha', 'max')  # Obtenemos la fecha más reciente del registro
+            Fecha=('fecha', 'max')
         ).reset_index()
 
         df_merged = pd.merge(df_pivot.reset_index(), df_totales, on=['producto', 'unidad'])
 
         dias_orden = ["L", "Ma", "Mi", "J", "V", "S", "D"]
         for d in dias_orden:
-            if d not in df_merged.columns: df_merged[d] = 0
+            if d not in df_merged.columns: 
+                df_merged[d] = 0
         
         df_merged = df_merged.rename(columns={'Total_Cantidad': 'Total'})
         df_merged['Costo Total'] = df_merged['Total_Costo']
@@ -204,22 +286,30 @@ class PanelInferior(QWidget):
         df_merged["Ganancia"] = df_merged["Precio Venta"] - df_merged["Costo Total"]
         
         self.mostrar_tabla_produccion(df_merged)
+        
+        # Actualizar métricas
+        total_produccion = df_merged['Total'].sum()
+        total_costo = df_merged['Costo Total'].sum()
+        total_venta = df_merged['Precio Venta'].sum()
+        total_ganancia = df_merged['Ganancia'].sum()
+        
+        self.actualizar_metricas(total_produccion, total_costo, total_venta, total_ganancia)
 
     def mostrar_tabla_produccion(self, df):
+        # Forzamos un limpiado completo de la tabla antes de redibujarla.
+        self.tabla_produccion.clearContents()
+        self.tabla_produccion.setRowCount(0)
         df['producto_unidad'] = df['producto'] + " (" + df['unidad'] + ")"
         self.tabla_produccion.setRowCount(df.shape[0])
         total_produccion, total_costo, total_venta, total_ganancia = 0, 0, 0, 0
 
         for i, row in df.iterrows():
-            # <--- MODIFICACIÓN: Añadir la fecha a la tabla (columna 0)
-            # Aseguramos que la fecha sea un objeto datetime para poder formatearla
             fecha_str = pd.to_datetime(row["Fecha"]).strftime('%Y-%m-%d')
             self.tabla_produccion.setItem(i, 0, QTableWidgetItem(fecha_str))
             
             self.tabla_produccion.setItem(i, 1, QTableWidgetItem(row["producto_unidad"]))
             
             dias_ordenados = ["L", "Ma", "Mi", "J", "V", "S", "D", "Total"]
-            # Los loops ahora empiezan en la columna siguiente
             for j, dia in enumerate(dias_ordenados, start=2):
                 val = row.get(dia, 0)
                 item = QTableWidgetItem(f"{val:.2f}")
@@ -234,54 +324,30 @@ class PanelInferior(QWidget):
                 elif col == "Precio Venta": total_venta += val
                 elif col == "Ganancia": total_ganancia += val
 
-        self.label_total_produccion.setText(
-            f"<b>Total producción: {total_produccion:,.2f} | Costo: ${total_costo:,.2f} | Venta: ${total_venta:,.2f} | Ganancia: ${total_ganancia:,.2f}</b>"
-        )
-    
-    def actualizar_analisis_mensual(self):
-        if self.df_produccion is None or self.df_produccion.empty:
-            self.tabla_mensual.setRowCount(0)
-            self.actualizar_graficos(pd.DataFrame())
-            return
+        self.actualizar_metricas(total_produccion, total_costo, total_venta, total_ganancia)
+
+    def exportar_a_excel(self):
+        """Exporta los datos actuales a un archivo Excel"""
+        try:
+            fecha_actual = datetime.now().strftime("%Y-%m-%d")
+            nombre_archivo = f"reporte_produccion_{fecha_actual}.xlsx"
             
-        df_agrupado = self.df_produccion.groupby('producto').agg(
-            costo_total=('costo', 'sum')
-        ).reset_index()
-        
-        df_agrupado['precio_venta'] = df_agrupado['costo_total'] * 1.30
-        df_agrupado['ganancia'] = df_agrupado['precio_venta'] - df_agrupado['costo_total']
-        df_agrupado['margen'] = df_agrupado.apply(
-            lambda row: (row['ganancia'] / row['precio_venta'] * 100) if row['precio_venta'] > 0 else 0,
-            axis=1
-        )
-        
-        self.tabla_mensual.setRowCount(len(df_agrupado))
-        for i, row in df_agrupado.iterrows():
-            self.tabla_mensual.setItem(i, 0, QTableWidgetItem(row['producto']))
-            self.tabla_mensual.setItem(i, 1, QTableWidgetItem(f"${row['costo_total']:,.2f}"))
-            self.tabla_mensual.setItem(i, 2, QTableWidgetItem(f"${row['precio_venta']:,.2f}"))
-            self.tabla_mensual.setItem(i, 3, QTableWidgetItem(f"${row['ganancia']:,.2f}"))
-            self.tabla_mensual.setItem(i, 4, QTableWidgetItem(f"{row['margen']:.2f}%"))
-        
-        self.actualizar_graficos(df_agrupado)
-    
-    def actualizar_graficos(self, df):
-        self.ax_costos.clear()
-        if not df.empty and df['costo_total'].sum() > 0:
-            self.ax_costos.pie(df['costo_total'], labels=df['producto'], autopct='%1.1f%%', startangle=90)
-            self.ax_costos.set_title('Distribución de Costos')
-        else:
-            self.ax_costos.text(0.5, 0.5, 'Sin datos', ha='center', va='center')
-        self.grafico_costos.draw()
-        
-        self.ax_ganancias.clear()
-        if not df.empty:
-            df_sorted = df.sort_values('ganancia', ascending=False).head(10)
-            self.ax_ganancias.bar(df_sorted['producto'], df_sorted['ganancia'], color='green')
-            self.ax_ganancias.set_title('Ganancias por Producto')
-            self.ax_ganancias.set_ylabel('Ganancia ($)')
-            self.ax_ganancias.tick_params(axis='x', rotation=45, labelsize=8)
-            self.grafico_ganancias.figure.tight_layout()
-        else:
-            self.ax_ganancias.text(0.5, 0.5, 'Sin datos', ha='center', va='center')
-        self.grafico_ganancias.draw()
+            with pd.ExcelWriter(nombre_archivo, engine='openpyxl') as writer:
+                self.df_produccion.to_excel(writer, sheet_name='Producción', index=False)
+                
+                # Crear hoja de resumen
+                resumen_data = {
+                    'Métrica': ['Producción Total', 'Costo Total', 'Venta Total', 'Ganancia Total'],
+                    'Valor': [
+                        self.metrica_produccion.valor_label.text(),
+                        self.metrica_costo.valor_label.text(),
+                        self.metrica_venta.valor_label.text(),
+                        self.metrica_ganancia.valor_label.text()
+                    ]
+                }
+                pd.DataFrame(resumen_data).to_excel(writer, sheet_name='Resumen', index=False)
+            
+            QMessageBox.information(self, "Éxito", f"Reporte exportado como {nombre_archivo}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo exportar el reporte: {e}")
