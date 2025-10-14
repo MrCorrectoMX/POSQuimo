@@ -225,14 +225,16 @@ class PanelInferiorRedisenado(QWidget):
             fecha_desde = self.date_desde.date().toPyDate()
             fecha_hasta = self.date_hasta.date().toPyDate()
             
+            # CORREGIDO: Consulta compatible con tu esquema
             query = text("""
                 SELECT 
-                    p.nombre_producto AS producto, p.unidad_medida_producto AS unidad,
+                    p.nombre_producto AS producto, 
+                    p.unidad_medida_producto AS unidad,
                     pr.dia, pr.fecha, pr.cantidad, pr.costo, pr.area
                 FROM produccion pr
                 JOIN productos p ON pr.producto_id = p.id_producto
                 WHERE pr.fecha BETWEEN :start_date AND :end_date
-                AND pr.semana_cerrada = 0
+                AND (pr.semana_cerrada = 0 OR pr.semana_cerrada IS NULL)
             """)
             
             self.df_produccion = pd.read_sql_query(

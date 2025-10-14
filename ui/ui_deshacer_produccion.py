@@ -133,6 +133,7 @@ class VentanaDeshacerProduccion(QDialog):
         """Carga los últimos 20 registros de producción para que el usuario elija."""
         try:
             with self.engine.connect() as conn:
+                # CORREGIDO: Consulta compatible
                 query = text("""
                     SELECT pr.id_produccion, pr.fecha, p.nombre_producto, pr.cantidad
                     FROM produccion pr
@@ -151,7 +152,6 @@ class VentanaDeshacerProduccion(QDialog):
                     self.tabla_produccion.setItem(i, 3, QTableWidgetItem(f"{row[3]:.2f}"))
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo cargar la producción reciente:\n{e}")
-
     # --- INICIO DE LA MODIFICACIÓN 4: ACTUALIZAR LÓGICA DE CONFIRMACIÓN ---
     def confirmar_y_deshacer(self):
         selected_items = self.tabla_produccion.selectedItems()

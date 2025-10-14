@@ -4,6 +4,7 @@ from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QScrollArea, QFrame, QGridLayout, QSizePolicy, QMessageBox, QTabWidget, QMenu,
     QAction, QInputDialog, QDialog, QComboBox,QLineEdit,QTableWidget,QHeaderView,QTableWidgetItem
+    ,QApplication
 )
 from PyQt5.QtCore import Qt, QEvent, QTimer
 from sqlalchemy import text
@@ -183,12 +184,11 @@ class POSWindow(QWidget):
     def _create_buttons_for_category(self, table_name, name_col, status_col, grid_layout):
         """
         Lee los productos (nombre y stock) y guarda la lista en self.products_cache[table_name]
-        Luego forza un relayout del grid correspondiente.
         """
         try:
             stock_col_map = {
                 "productos": "cantidad_producto",
-                "productosreventa": "cantidad_prev",
+                "productosreventa": "cantidad_prev", 
                 "materiasprimas": "cantidad_comprada_mp"
             }
             stock_col = stock_col_map.get(table_name, None)
@@ -202,7 +202,6 @@ class POSWindow(QWidget):
                         ORDER BY nombre;
                     """)
                 else:
-                    # Si no conocemos la columna de stock, devolvemos NULL para stock
                     query = text(f"""
                         SELECT {name_col} AS nombre, NULL AS stock
                         FROM {table_name}
@@ -215,10 +214,10 @@ class POSWindow(QWidget):
             print(f"[ui_pos] Error al leer '{table_name}': {e}")
             productos = []
 
-        # Guardar en cache (ahora lista de tuplas (nombre, stock))
+        # Guardar en cache
         self.products_cache[table_name] = productos
 
-        # Forzar relayout del viewport correspondiente
+        # Forzar relayout
         for viewport, (tn, gl) in self.viewport_map.items():
             if tn == table_name:
                 self._relayout_table(table_name, gl, viewport)
@@ -312,17 +311,16 @@ class POSWindow(QWidget):
         self.cliente_combobox.clear()
         try:
             with self.engine.connect() as conn:
-                # CAMBIO: Se usa 'nombre_cliente' en lugar de 'nombre'
+                # CORREGIDO: Usar nombre_cliente consistentemente
                 query = text("SELECT nombre_cliente, id_cliente FROM clientes ORDER BY nombre_cliente")
                 rows = conn.execute(query).fetchall()
-                # Usamos el id_cliente como userData para facilitar la búsqueda
                 for nombre_cliente, id_cliente in rows:
                     self.cliente_combobox.addItem(nombre_cliente, id_cliente)
                     
         except Exception as e:
             QMessageBox.critical(self, "Error de Base de Datos", f"No se pudo cargar la lista de clientes:\n{e}")
-            # Fallback a 'Cliente General'
-            self.cliente_combobox.addItem("Cliente General", 0) 
+            # Fallback
+            self.cliente_combobox.addItem("Cliente General", 1)
 
     def _get_selected_client_id(self):
         """Obtiene el ID del cliente seleccionado en el QComboBox."""
@@ -518,139 +516,289 @@ class POSWindow(QWidget):
             return
 
         try:
-            with self.engine.begin() as conn:
-                cliente_id = self._get_selected_client_id()
+            # 🔥 CAMBIO: Usar connect() en lugar de begin() para control manual de transacciones
+            with self.engine.connect() as conn:
+                with conn.begin() as trans:  # Control manual de transacción
+                    cliente_id = self._get_selected_client_id()
 
-                # Si no hay cliente seleccionado, usamos "Cliente General"
-                if not cliente_id:
-                    query_cliente_general = text("SELECT id_cliente FROM clientes WHERE nombre_cliente = 'Cliente General'")
-                    cliente_result = conn.execute(query_cliente_general).fetchone()
-                    if cliente_result:
-                        cliente_id = cliente_result[0]
-                    else:
-                        QMessageBox.warning(self, "Error de Cliente", "No se pudo identificar al cliente ni al cliente general por defecto.")
+                    if not cliente_id:
+                        query_cliente_general = text("SELECT id_cliente FROM clientes WHERE nombre_cliente = 'Cliente General'")
+                        cliente_result = conn.execute(query_cliente_general).fetchone()
+                        if cliente_result:
+                            cliente_id = cliente_result[0]
+                        else:
+                            QMessageBox.warning(self, "Error de Cliente", "No se pudo identificar al cliente ni al cliente general por defecto.")
+                            return
+
+                    # PRIMERO: VERIFICAR STOCK PARA TODOS LOS PRODUCTOS
+                    productos_sin_stock = []
+                    for product_name, data in self.current_ticket.items():
+                        cantidad = data["qty"]
+                        
+                        # Verificar producto normal
+                        producto = conn.execute(
+                            text("SELECT id_producto, cantidad_producto FROM productos WHERE nombre_producto = :nombre"),
+                            {"nombre": product_name}
+                        ).fetchone()
+
+                        if producto:
+                            producto_id, stock_actual = producto
+                            if stock_actual < cantidad:
+                                productos_sin_stock.append(f"'{product_name}': Stock {stock_actual}, Necesario {cantidad}")
+                            continue
+
+                        # Verificar producto reventa
+                        reventa = conn.execute(
+                            text("SELECT id_prev, cantidad_prev FROM productosreventa WHERE nombre_prev = :nombre"),
+                            {"nombre": product_name}
+                        ).fetchone()
+
+                        if reventa:
+                            id_prev, stock_actual = reventa
+                            if stock_actual < cantidad:
+                                productos_sin_stock.append(f"'{product_name}': Stock {stock_actual}, Necesario {cantidad}")
+                            continue
+
+                        # Verificar materia prima
+                        mp = conn.execute(
+                            text("SELECT id_mp, cantidad_comprada_mp FROM materiasprimas WHERE nombre_mp = :nombre"),
+                            {"nombre": product_name}
+                        ).fetchone()
+
+                        if mp:
+                            id_mp, stock_actual = mp
+                            if stock_actual < cantidad:
+                                productos_sin_stock.append(f"'{product_name}': Stock {stock_actual}, Necesario {cantidad}")
+                            continue
+
+                        productos_sin_stock.append(f"'{product_name}': No encontrado")
+
+                    if productos_sin_stock:
+                        mensaje_error = "Stock insuficiente:\n" + "\n".join(productos_sin_stock)
+                        QMessageBox.warning(self, "Stock Insuficiente", mensaje_error)
                         return
 
-                for product_name, data in self.current_ticket.items():
-                    cantidad = data["qty"]
-                    precio_unitario = data["price"]
-                    total_linea = cantidad * precio_unitario
+                    # SEGUNDO: PROCESAR VENTA COMPLETA
+                    for product_name, data in self.current_ticket.items():
+                        cantidad = data["qty"]
+                        precio_unitario = data["price"]
+                        total_linea = cantidad * precio_unitario
 
-                    # ---------- PRODUCTO NORMAL ----------
-                    producto = conn.execute(
-                        text("SELECT id_producto, cantidad_producto FROM productos WHERE nombre_producto = :nombre"),
-                        {"nombre": product_name}
-                    ).fetchone()
+                        # ---------- PRODUCTO NORMAL ----------
+                        producto = conn.execute(
+                            text("SELECT id_producto, cantidad_producto FROM productos WHERE nombre_producto = :nombre"),
+                            {"nombre": product_name}
+                        ).fetchone()
 
-                    if producto:
-                        producto_id, stock_actual = producto
+                        if producto:
+                            producto_id, stock_actual = producto
 
-                        if stock_actual < cantidad:
-                            QMessageBox.warning(self, "Stock Insuficiente",
-                                                f"No hay suficiente stock de '{product_name}'. Solo hay {stock_actual} unidades.")
-                            return
+                            # Actualizar stock
+                            conn.execute(
+                                text("UPDATE productos SET cantidad_producto = cantidad_producto - :cantidad WHERE id_producto = :id"),
+                                {"cantidad": cantidad, "id": producto_id}
+                            )
 
-                        # Actualizar stock
-                        conn.execute(
-                            text("UPDATE productos SET cantidad_producto = cantidad_producto - :cantidad WHERE id_producto = :id"),
-                            {"cantidad": cantidad, "id": producto_id}
-                        )
+                            # Registrar venta
+                            conn.execute(text("""
+                                INSERT INTO ventas (id_cliente, nombre_producto, tipo_tabla, cantidad, total, fecha_venta)
+                                VALUES (:cliente, :nombre, 'productos', :cantidad, :total, DATE('now'))
+                            """), {
+                                "cliente": cliente_id,
+                                "nombre": product_name,
+                                "cantidad": cantidad,
+                                "total": total_linea
+                            })
 
-                        # Registrar venta en tabla VENTAS
-                        conn.execute(text("""
-                            INSERT INTO ventas (id_cliente, id_producto, nombre_producto, cantidad, precio_unitario, total, fecha_venta)
-                            VALUES (:cliente, :producto, :nombre, :cantidad, :precio, :total, DATE('now'))
-                        """), {
-                            "cliente": cliente_id,
-                            "producto": producto_id,
-                            "nombre": product_name,
-                            "cantidad": cantidad,
-                            "precio": precio_unitario,
-                            "total": total_linea
-                        })
-                        continue  # saltamos al siguiente producto
+                        # ---------- PRODUCTO DE REVENTA ----------
+                        reventa = conn.execute(
+                            text("SELECT id_prev, cantidad_prev, precio_venta, proveedor, area_prev FROM productosreventa WHERE nombre_prev = :nombre"),
+                            {"nombre": product_name}
+                        ).fetchone()
 
-                    # ---------- PRODUCTO DE REVENTA ----------
-                    reventa = conn.execute(
-                        text("SELECT id_prev, cantidad_prev, precio_venta, proveedor, area_prev FROM productosreventa WHERE nombre_prev = :nombre"),
-                        {"nombre": product_name}
-                    ).fetchone()
+                        if reventa:
+                            id_prev, stock_actual, precio_venta, proveedor, area = reventa
 
-                    if reventa:
-                        id_prev, stock_actual, precio_venta, proveedor, area = reventa
+                            # Actualizar stock
+                            conn.execute(
+                                text("UPDATE productosreventa SET cantidad_prev = cantidad_prev - :cantidad WHERE id_prev = :id"),
+                                {"cantidad": cantidad, "id": id_prev}
+                            )
 
-                        if stock_actual < cantidad:
-                            QMessageBox.warning(self, "Stock Insuficiente",
-                                                f"No hay suficiente stock de '{product_name}'. Solo hay {stock_actual} unidades.")
-                            return
+                            # Registrar venta
+                            conn.execute(text("""
+                                INSERT INTO venta_reventa (fecha_venta, nombre_producto, cantidad, unidad_medida, precio_unitario, total, proveedor, area)
+                                VALUES (DATE('now'), :nombre, :cantidad, :unidad, :precio, :total, :proveedor, :area)
+                            """), {
+                                "nombre": product_name,
+                                "cantidad": cantidad,
+                                "unidad": "PIEZA",
+                                "precio": precio_unitario,
+                                "total": total_linea,
+                                "proveedor": proveedor,
+                                "area": area
+                            })
 
-                        # Actualizar stock
-                        conn.execute(
-                            text("UPDATE productosreventa SET cantidad_prev = cantidad_prev - :cantidad WHERE id_prev = :id"),
-                            {"cantidad": cantidad, "id": id_prev}
-                        )
+                        # ---------- MATERIA PRIMA ----------
+                        mp = conn.execute(
+                            text("SELECT id_mp, cantidad_comprada_mp, unidad_medida_mp FROM materiasprimas WHERE nombre_mp = :nombre"),
+                            {"nombre": product_name}
+                        ).fetchone()
 
-                        # Registrar venta en tabla VENTA_REVENTA
-                        conn.execute(text("""
-                            INSERT INTO venta_reventa (id_prev, nombre_producto, cantidad, precio_unitario, total, proveedor, area, fecha_venta)
-                            VALUES (:id_prev, :nombre, :cantidad, :precio, :total, :proveedor, :area, DATE('now'))
-                        """), {
-                            "id_prev": id_prev,
-                            "nombre": product_name,
-                            "cantidad": cantidad,
-                            "precio": precio_unitario,
-                            "total": total_linea,
-                            "proveedor": proveedor,
-                            "area": area
-                        })
-                        continue
+                        if mp:
+                            id_mp, stock_actual, unidad_mp = mp
 
-                    # ---------- MATERIA PRIMA ----------
-                    mp = conn.execute(
-                        text("SELECT id_mp, cantidad_comprada_mp FROM materiasprimas WHERE nombre_mp = :nombre"),
-                        {"nombre": product_name}
-                    ).fetchone()
+                            # Actualizar stock
+                            conn.execute(
+                                text("UPDATE materiasprimas SET cantidad_comprada_mp = cantidad_comprada_mp - :cantidad WHERE id_mp = :id"),
+                                {"cantidad": cantidad, "id": id_mp}
+                            )
 
-                    if mp:
-                        id_mp, stock_actual = mp
+                            # Registrar venta
+                            conn.execute(text("""
+                                INSERT INTO ventas (id_cliente, nombre_producto, tipo_tabla, cantidad, total, fecha_venta)
+                                VALUES (:cliente, :nombre, 'materiasprimas', :cantidad, :total, DATE('now'))
+                            """), {
+                                "cliente": cliente_id,
+                                "nombre": product_name,
+                                "cantidad": cantidad,
+                                "total": total_linea
+                            })
 
-                        if stock_actual < cantidad:
-                            QMessageBox.warning(self, "Stock Insuficiente",
-                                                f"No hay suficiente stock de '{product_name}'. Solo hay {stock_actual} unidades.")
-                            return
+                    # 🔥🔥🔥 HACER COMMIT INMEDIATO ANTES DE ACTUALIZAR LA UI 🔥🔥🔥
+                    trans.commit()
+                    print("✅ Transacción commitada a la BD")
 
-                        # Actualizar stock
-                        conn.execute(
-                            text("UPDATE materiasprimas SET cantidad_comprada_mp = cantidad_comprada_mp - :cantidad WHERE id_mp = :id"),
-                            {"cantidad": cantidad, "id": id_mp}
-                        )
-
-                        # Registrar venta en tabla VENTA_MP
-                        conn.execute(text("""
-                            INSERT INTO venta_mp (id_mp, nombre_producto, cantidad, precio_unitario, total, fecha_venta)
-                            VALUES (:id_mp, :nombre, :cantidad, :precio, :total, DATE('now'))
-                        """), {
-                            "id_mp": id_mp,
-                            "nombre": product_name,
-                            "cantidad": cantidad,
-                            "precio": precio_unitario,
-                            "total": total_linea
-                        })
-                        continue
-
-                    # ---------- SI NO EXISTE EN NINGUNA TABLA ----------
-                    QMessageBox.warning(self, "Producto No Encontrado",
-                                        f"El producto '{product_name}' no existe en la base de datos.")
-                    return
+            # 🔥🔥🔥 CORRECCIÓN: ESTO DEBE ESTAR FUERA del bloque with self.engine.connect() 🔥🔥🔥
+            # ACTUALIZAR VISTA DESPUÉS DEL COMMIT
+            self._force_immediate_refresh()
 
             # Si todo sale bien
             total_str = f"${self.current_total:,.2f}"
             QMessageBox.information(self, "Venta Registrada", f"Venta realizada con éxito.\n\nTotal: {total_str}")
+            
             self._clear_ticket()
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo registrar la venta: {str(e)}")
 
+    def _force_immediate_refresh(self):
+        """Actualización que MANTIENE el layout pero actualiza stocks"""
+        try:
+            print("🔄 Actualización MANTENIENDO layout...")
+            
+            # 1. Leer datos FRESCOS desde BD
+            stocks_actualizados = {}
+            with self.engine.connect() as fresh_conn:
+                # Leer todos los productos actualizados
+                query_productos = text("SELECT nombre_producto, cantidad_producto FROM productos WHERE estatus_producto = 1")
+                for nombre, stock in fresh_conn.execute(query_productos).fetchall():
+                    stocks_actualizados[nombre] = stock
+                
+                query_reventa = text("SELECT nombre_prev, cantidad_prev FROM productosreventa WHERE estatus_prev = 1")  
+                for nombre, stock in fresh_conn.execute(query_reventa).fetchall():
+                    stocks_actualizados[nombre] = stock
+                    
+                query_mp = text("SELECT nombre_mp, cantidad_comprada_mp FROM materiasprimas WHERE estatus_mp = 1")
+                for nombre, stock in fresh_conn.execute(query_mp).fetchall():
+                    stocks_actualizados[nombre] = stock
+            
+            # 2. Actualizar stocks en la cache
+            for table_name in ["productos", "productosreventa", "materiasprimas"]:
+                if table_name in self.products_cache:
+                    productos_actualizados = []
+                    for nombre, stock_viejo in self.products_cache[table_name]:
+                        stock_actual = stocks_actualizados.get(nombre, stock_viejo)
+                        productos_actualizados.append((nombre, stock_actual))
+                    self.products_cache[table_name] = productos_actualizados
+            
+            # 3. ACTUALIZAR BOTONES EXISTENTES sin recrear el layout
+            self._update_existing_buttons_stocks(stocks_actualizados)
+            
+            print("✅ Stocks actualizados manteniendo layout")
+            
+        except Exception as e:
+            print(f"❌ Error actualizando stocks: {e}")
+
+    def _update_existing_buttons_stocks(self, stocks_actualizados):
+        """Actualiza SOLO los textos de los botones existentes"""
+        try:
+            # Para cada grid layout
+            for grid_layout in [self.grid_layout_productos, self.grid_layout_reventa, self.grid_layout_materias_primas]:
+                for i in range(grid_layout.count()):
+                    item = grid_layout.itemAt(i)
+                    if item and item.widget():
+                        btn = item.widget()
+                        if isinstance(btn, QPushButton):
+                            current_text = btn.text()
+                            if " (" in current_text:
+                                product_name = current_text.split(" (")[0]
+                                
+                                # Buscar stock actualizado
+                                nuevo_stock = stocks_actualizados.get(product_name)
+                                if nuevo_stock is not None:
+                                    # Formatear stock
+                                    try:
+                                        if isinstance(nuevo_stock, float) and nuevo_stock.is_integer():
+                                            stock_display = int(nuevo_stock)
+                                        else:
+                                            stock_display = nuevo_stock
+                                    except Exception:
+                                        stock_display = nuevo_stock
+                                    
+                                    # Actualizar texto
+                                    nuevo_texto = f"{product_name} ({stock_display})"
+                                    if btn.text() != nuevo_texto:
+                                        btn.setText(nuevo_texto)
+                                        print(f"✅ Actualizado: {product_name} -> {stock_display}")
+                            
+        except Exception as e:
+            print(f"❌ Error actualizando botones: {e}")
+
+    def _update_tab_counts(self):
+        """Actualiza los contadores en los nombres de las pestañas"""
+        try:
+            for i in range(self.tabs_productos.count()):
+                scroll_area = self.tabs_productos.widget(i)
+                viewport = scroll_area.viewport()
+                table_name, _ = self.viewport_map.get(viewport, (None, None))
+                
+                if table_name:
+                    with self.engine.connect() as conn:
+                        result = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
+                        count = result.scalar() or 0
+                    
+                    # Actualizar nombre de pestaña con contador
+                    old_text = self.tabs_productos.tabText(i)
+                    # Remover contador anterior si existe
+                    base_text = old_text.split(' (')[0] if ' (' in old_text else old_text
+                    self.tabs_productos.setTabText(i, f"{base_text} ({count})")
+                    
+        except Exception as e:
+            print(f"Error actualizando contadores: {e}")
+
+    def _refresh_tab_layout(self, table_name):
+        """Refresca solo la pestaña específica"""
+        try:
+            # Encontrar el grid layout correspondiente a esta tabla
+            grid_layout_map = {
+                "productos": self.grid_layout_productos,
+                "productosreventa": self.grid_layout_reventa, 
+                "materiasprimas": self.grid_layout_materias_primas
+            }
+            
+            grid_layout = grid_layout_map.get(table_name)
+            if not grid_layout:
+                return
+                
+            # Encontrar el viewport correspondiente
+            for viewport, (tn, gl) in self.viewport_map.items():
+                if tn == table_name and gl == grid_layout:
+                    self._relayout_table(table_name, grid_layout, viewport)
+                    break
+                    
+        except Exception as e:
+            print(f"Error al refrescar pestaña {table_name}: {e}")
 
     def _aumentar_stock_existente(self):
         """Permite aumentar stock de una materia prima existente"""
