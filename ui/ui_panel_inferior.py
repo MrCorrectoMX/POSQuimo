@@ -1,4 +1,4 @@
-# ui/ui_panel_inferior_redisenado.py (VERSIÓN CORREGIDA)
+# ui/ui_panel_inferior_redisenado.py (VERSIÓN CORREGIDA - SIN ERROR DE LAYOUT)
 
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QTableWidget, QTableWidgetItem,
@@ -8,11 +8,6 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QDate
 import pandas as pd
 from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
-import matplotlib
-matplotlib.use('Qt5Agg')
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-from matplotlib.figure import Figure
 from sqlalchemy import text
 from .ui_deshacer_produccion import VentanaDeshacerProduccion
 
@@ -47,18 +42,18 @@ class PanelInferiorRedisenado(QWidget):
         self.engine = engine
         self.refrescar_tabla_principal_callback = refrescar_tabla_principal_callback
         self.df_produccion = pd.DataFrame()
+        self.df_mp = pd.DataFrame()
+        self.df_reventa = pd.DataFrame()
 
-        # Layout principal con splitter para mayor flexibilidad
+        # Layout principal
         main_layout = QVBoxLayout(self)
-        self.splitter = QSplitter(Qt.Vertical)
-        main_layout.addWidget(self.splitter)
         
         # --- Panel superior: Resumen y métricas ---
         self.panel_superior = QWidget()
-        self.panel_superior_layout = QVBoxLayout(self.panel_superior)
+        panel_superior_layout = QVBoxLayout(self.panel_superior)  # Layout local
         
-        # Selector de período mejorado
-        periodo_group = QGroupBox("Período de Análisis")
+        # Selector de período
+        periodo_group = QGroupBox("Período de Análisis - Producción")
         periodo_layout = QHBoxLayout(periodo_group)
         
         periodo_layout.addWidget(QLabel("Desde:"))
@@ -79,100 +74,91 @@ class PanelInferiorRedisenado(QWidget):
         
         periodo_layout.addStretch()
         
-        self.btn_exportar = QPushButton("📊 Exportar Excel")
+        self.btn_exportar = QPushButton("Exportar Excel")
         self.btn_exportar.clicked.connect(self.exportar_a_excel)
         periodo_layout.addWidget(self.btn_exportar)
         
-        self.panel_superior_layout.addWidget(periodo_group)
+        panel_superior_layout.addWidget(periodo_group)
         
         # Tarjetas de métricas
         self.metricas_layout = QHBoxLayout()
-        self.metrica_produccion = TarjetaMetrica("Producción Total", "0.00", "#e3f2fd")
-        self.metrica_costo = TarjetaMetrica("Costo Total", "$0.00", "#ffebee")
-        self.metrica_venta = TarjetaMetrica("Venta Total", "$0.00", "#e8f5e9")
-        self.metrica_ganancia = TarjetaMetrica("Ganancia Total", "$0.00", "#fff3e0")
+        self.metrica_produccion = TarjetaMetrica("Productos Producidos", "0.00", "#e3f2fd")
+        self.metrica_costo_produccion = TarjetaMetrica("Costo Producción", "$0.00", "#ffebee")
+        self.metrica_stock_mp = TarjetaMetrica("Stock MP", "0.00", "#e8f5e9")
+        self.metrica_stock_reventa = TarjetaMetrica("Stock Reventa", "0.00", "#fff3e0")
         
         self.metricas_layout.addWidget(self.metrica_produccion)
-        self.metricas_layout.addWidget(self.metrica_costo)
-        self.metricas_layout.addWidget(self.metrica_venta)
-        self.metricas_layout.addWidget(self.metrica_ganancia)
+        self.metricas_layout.addWidget(self.metrica_costo_produccion)
+        self.metricas_layout.addWidget(self.metrica_stock_mp)
+        self.metricas_layout.addWidget(self.metrica_stock_reventa)
         
-        self.panel_superior_layout.addLayout(self.metricas_layout)
-        self.splitter.addWidget(self.panel_superior)
+        panel_superior_layout.addLayout(self.metricas_layout)
+        main_layout.addWidget(self.panel_superior)
         
         # --- Panel inferior: Tabs con detalles ---
         self.tabs = QTabWidget()
-        self.splitter.addWidget(self.tabs)
-        self.splitter.setSizes([200, 600])
+        main_layout.addWidget(self.tabs)
         
         # Pestaña de Producción
         self.tab_produccion = QWidget()
-        self.tabs.addTab(self.tab_produccion, "📋 Producción Detallada")
-        self.tab_produccion.setLayout(QVBoxLayout())
+        self.tabs.addTab(self.tab_produccion, "Producción de Productos")
+        tab_produccion_layout = QVBoxLayout(self.tab_produccion)  # Layout local
         
         # Tabla de producción con scroll
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         self.tabla_produccion = QTableWidget()
         scroll_area.setWidget(self.tabla_produccion)
-        self.tab_produccion.layout().addWidget(scroll_area)
+        tab_produccion_layout.addWidget(scroll_area)
         
-        self.tabla_produccion.setColumnCount(13)
+        self.tabla_produccion.setColumnCount(8)
         self.tabla_produccion.setHorizontalHeaderLabels(
-            ["Fecha", "Producto (unidad)", "L", "Ma", "Mi", "J", "V", "S", "D", "Total", "Costo Total", "Precio Venta", "Ganancia"]
+            ["Fecha", "Producto (unidad)", "L", "Ma", "Mi", "J", "V", "Total Producido"]
         )
         self.tabla_produccion.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         
         # Botones de acción
         btn_layout = QHBoxLayout()
-        btn_cargar = QPushButton("🔄 Recargar")
+        btn_cargar = QPushButton("Recargar")
         btn_cargar.clicked.connect(self.cargar_datos_desde_db)
         btn_layout.addWidget(btn_cargar)
         
-        self.btn_corte_semana = QPushButton("📅 Corte Semanal")
-        self.btn_corte_semana.setStyleSheet("background-color: #f5b041; color: black;")
-        self.btn_corte_semana.clicked.connect(self.realizar_corte_semana)
-        btn_layout.addWidget(self.btn_corte_semana)
-
-        self.btn_deshacer = QPushButton("↩️ Deshacer Producción")
+        self.btn_deshacer = QPushButton("Deshacer Producción")
         self.btn_deshacer.setStyleSheet("background-color: #5dade2; color: white;")
         self.btn_deshacer.clicked.connect(self.abrir_ventana_deshacer)
         btn_layout.addWidget(self.btn_deshacer)
 
-        self.tab_produccion.layout().addLayout(btn_layout)
+        tab_produccion_layout.addLayout(btn_layout)
+        
+        # Pestaña de Inventario
+        self.tab_inventario = QWidget()
+        self.tabs.addTab(self.tab_inventario, "Inventario MP y Reventa")
+        tab_inventario_layout = QVBoxLayout(self.tab_inventario)  # Layout local
+        
+        # Tabla de Materias Primas
+        self.tabla_mp = QTableWidget()
+        self.tabla_mp.setColumnCount(4)
+        self.tabla_mp.setHorizontalHeaderLabels([
+            "Materia Prima", "Stock", "Costo Unitario", "Costo Total"
+        ])
+        self.tabla_mp.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        
+        # Tabla de Productos Reventa
+        self.tabla_reventa = QTableWidget()
+        self.tabla_reventa.setColumnCount(4)
+        self.tabla_reventa.setHorizontalHeaderLabels([
+            "Producto Reventa", "Stock", "Costo Compra", "Costo Total"
+        ])
+        self.tabla_reventa.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        
+        # Layout para las dos tablas de inventario
+        tab_inventario_layout.addWidget(QLabel("<b>Materias Primas:</b>"))
+        tab_inventario_layout.addWidget(self.tabla_mp)
+        tab_inventario_layout.addWidget(QLabel("<b>Productos de Reventa:</b>"))
+        tab_inventario_layout.addWidget(self.tabla_reventa)
         
         # Cargar datos iniciales
         self.cargar_datos_desde_db()
-
-    def realizar_corte_semana(self):
-        """
-        Marca todos los registros de producción abiertos como 'cerrados'.
-        """
-        confirm = QMessageBox.question(self, "Confirmar Corte",
-                                       "¿Está seguro de que desea cerrar la semana actual?\n"
-                                       "Esto reiniciará la vista de 'Última semana'. Esta acción no se puede deshacer.",
-                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        
-        if confirm == QMessageBox.StandardButton.No:
-            return
-
-        try:
-            with self.engine.connect() as conn:
-                with conn.begin() as trans:
-                    query = text("UPDATE produccion SET semana_cerrada = 1 WHERE semana_cerrada = 0")
-                    result = conn.execute(query)
-                    
-                    QMessageBox.information(self, "Éxito",
-                                            f"Corte de semana realizado.\n"
-                                            f"{result.rowcount} registros de producción han sido archivados.")
-            
-            # Recargamos los datos para que la vista se actualice
-            self.cargar_datos_desde_db()
-            if self.refrescar_tabla_principal_callback:
-                self.refrescar_tabla_principal_callback()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo realizar el corte de semana:\n{e}")
 
     def abrir_ventana_deshacer(self):
         """Abre la ventana de diálogo para seleccionar y deshacer una producción."""
@@ -180,12 +166,12 @@ class PanelInferiorRedisenado(QWidget):
         
         if dialogo.exec_() == QDialog.Accepted:
             print("Acción de deshacer completada. Refrescando datos...")
-            # Si la acción fue exitosa, recargamos todas las vistas
             self.cargar_datos_desde_db()
             if self.refrescar_tabla_principal_callback:
                 self.refrescar_tabla_principal_callback()
 
     def registrar_produccion_con_costo(self, producto_nombre, cantidad, area, costo):
+        """Registra producción de productos terminados"""
         fecha_actual = datetime.now().date()
         dias_semana = ["L", "Ma", "Mi", "J", "V"]
         dia_str = dias_semana[fecha_actual.weekday()]
@@ -220,13 +206,13 @@ class PanelInferiorRedisenado(QWidget):
             QMessageBox.critical(self, "Error de Base de Datos", f"Error al registrar producción: {e}")
 
     def cargar_datos_desde_db(self):
-        """Carga los datos desde la base de datos según el período seleccionado"""
+        """Carga los datos desde la base de datos"""
         try:
             fecha_desde = self.date_desde.date().toPyDate()
             fecha_hasta = self.date_hasta.date().toPyDate()
             
-            # CORREGIDO: Consulta compatible con tu esquema
-            query = text("""
+            # 1. CARGAR PRODUCCIÓN
+            query_produccion = text("""
                 SELECT 
                     p.nombre_producto AS producto, 
                     p.unidad_medida_producto AS unidad,
@@ -234,33 +220,71 @@ class PanelInferiorRedisenado(QWidget):
                 FROM produccion pr
                 JOIN productos p ON pr.producto_id = p.id_producto
                 WHERE pr.fecha BETWEEN :start_date AND :end_date
-                AND (pr.semana_cerrada = 0 OR pr.semana_cerrada IS NULL)
+                ORDER BY pr.fecha, p.nombre_producto
             """)
             
             self.df_produccion = pd.read_sql_query(
-                query, self.engine, 
+                query_produccion, self.engine, 
                 params={"start_date": fecha_desde, "end_date": fecha_hasta}
             )
 
-            if self.df_produccion.empty:
-                self.tabla_produccion.setRowCount(0)
-                self.actualizar_metricas(0, 0, 0, 0)
-                return
+            # 2. CARGAR MATERIAS PRIMAS (stock actual)
+            query_mp = text("""
+                SELECT 
+                    nombre_mp,
+                    cantidad_comprada_mp as stock,
+                    costo_unitario_mp as costo_unitario,
+                    (cantidad_comprada_mp * costo_unitario_mp) as costo_total
+                FROM materiasprimas
+                WHERE estatus_mp = 1
+                ORDER BY nombre_mp
+            """)
+            
+            self.df_mp = pd.read_sql_query(query_mp, self.engine)
 
+            # 3. CARGAR PRODUCTOS REVENTA (stock actual)
+            query_reventa = text("""
+                SELECT 
+                    nombre_prev,
+                    cantidad_prev as stock,
+                    precio_compra as costo_unitario,
+                    (cantidad_prev * precio_compra) as costo_total
+                FROM productosreventa
+                WHERE estatus_prev = 1
+                ORDER BY nombre_prev
+            """)
+            
+            self.df_reventa = pd.read_sql_query(query_reventa, self.engine)
+
+            # Actualizar todas las vistas
             self.actualizar_vista_produccion()
+            self.actualizar_vista_inventario()
+            self.actualizar_metricas()
 
         except Exception as e:
             QMessageBox.critical(self, "Error de Carga", f"No se pudo leer la base de datos: {e}")
 
-    def actualizar_metricas(self, total_produccion, total_costo, total_venta, total_ganancia):
-        """Actualiza las tarjetas de métricas con los nuevos valores"""
+    def actualizar_metricas(self):
+        """Actualiza las métricas globales"""
+        # Métricas de producción
+        total_produccion = self.df_produccion['cantidad'].sum() if not self.df_produccion.empty else 0
+        costo_produccion = self.df_produccion['costo'].sum() if not self.df_produccion.empty else 0
+        
+        # Métricas de inventario
+        total_stock_mp = self.df_mp['stock'].sum() if not self.df_mp.empty else 0
+        total_stock_reventa = self.df_reventa['stock'].sum() if not self.df_reventa.empty else 0
+        
         self.metrica_produccion.valor_label.setText(f"{total_produccion:,.2f}")
-        self.metrica_costo.valor_label.setText(f"${total_costo:,.2f}")
-        self.metrica_venta.valor_label.setText(f"${total_venta:,.2f}")
-        self.metrica_ganancia.valor_label.setText(f"${total_ganancia:,.2f}")
+        self.metrica_costo_produccion.valor_label.setText(f"${costo_produccion:,.2f}")
+        self.metrica_stock_mp.valor_label.setText(f"{total_stock_mp:,.2f}")
+        self.metrica_stock_reventa.valor_label.setText(f"{total_stock_reventa:,.2f}")
 
     def actualizar_vista_produccion(self):
-        """Actualiza la tabla de producción y las métricas"""
+        """Actualiza la tabla de producción"""
+        if self.df_produccion.empty:
+            self.tabla_produccion.setRowCount(0)
+            return
+            
         df = self.df_produccion.copy()
         df_pivot = df.pivot_table(
             index=["producto", "unidad"], 
@@ -271,7 +295,6 @@ class PanelInferiorRedisenado(QWidget):
         
         df_totales = df.groupby(['producto', 'unidad']).agg(
             Total_Cantidad=('cantidad', 'sum'),
-            Total_Costo=('costo', 'sum'),
             Fecha=('fecha', 'max')
         ).reset_index()
 
@@ -283,32 +306,47 @@ class PanelInferiorRedisenado(QWidget):
                 df_merged[d] = 0
         
         df_merged = df_merged.rename(columns={'Total_Cantidad': 'Total'})
-        df_merged['Costo Total'] = df_merged['Total_Costo']
-        df_merged["Precio Venta"] = df_merged["Costo Total"] * 1.30
-        df_merged["Ganancia"] = df_merged["Precio Venta"] - df_merged["Costo Total"]
         
         self.mostrar_tabla_produccion(df_merged)
+
+    def actualizar_vista_inventario(self):
+        """Actualiza las tablas de inventario"""
+        # Materias Primas
+        if not self.df_mp.empty:
+            self.tabla_mp.setRowCount(len(self.df_mp))
+            for i, row in self.df_mp.iterrows():
+                self.tabla_mp.setItem(i, 0, QTableWidgetItem(str(row['nombre_mp'])))
+                self.tabla_mp.setItem(i, 1, QTableWidgetItem(f"{row['stock']:.2f}"))
+                self.tabla_mp.setItem(i, 2, QTableWidgetItem(f"${row['costo_unitario']:,.2f}"))
+                self.tabla_mp.setItem(i, 3, QTableWidgetItem(f"${row['costo_total']:,.2f}"))
+        else:
+            self.tabla_mp.setRowCount(0)
         
-        # Actualizar métricas
-        total_produccion = df_merged['Total'].sum()
-        total_costo = df_merged['Costo Total'].sum()
-        total_venta = df_merged['Precio Venta'].sum()
-        total_ganancia = df_merged['Ganancia'].sum()
-        
-        self.actualizar_metricas(total_produccion, total_costo, total_venta, total_ganancia)
+        # Productos Reventa
+        if not self.df_reventa.empty:
+            self.tabla_reventa.setRowCount(len(self.df_reventa))
+            for i, row in self.df_reventa.iterrows():
+                self.tabla_reventa.setItem(i, 0, QTableWidgetItem(str(row['nombre_prev'])))
+                self.tabla_reventa.setItem(i, 1, QTableWidgetItem(f"{row['stock']:.2f}"))
+                self.tabla_reventa.setItem(i, 2, QTableWidgetItem(f"${row['costo_unitario']:,.2f}"))
+                self.tabla_reventa.setItem(i, 3, QTableWidgetItem(f"${row['costo_total']:,.2f}"))
+        else:
+            self.tabla_reventa.setRowCount(0)
 
     def mostrar_tabla_produccion(self, df):
-        # Forzamos un limpiado completo de la tabla antes de redibujarla.
+        """Muestra la tabla de producción"""
         self.tabla_produccion.clearContents()
         self.tabla_produccion.setRowCount(0)
+        
+        if df.empty:
+            return
+            
         df['producto_unidad'] = df['producto'] + " (" + df['unidad'] + ")"
         self.tabla_produccion.setRowCount(df.shape[0])
-        total_produccion, total_costo, total_venta, total_ganancia = 0, 0, 0, 0
 
         for i, row in df.iterrows():
-            fecha_str = pd.to_datetime(row["Fecha"]).strftime('%Y-%m-%d')
+            fecha_str = pd.to_datetime(row["Fecha"]).strftime('%Y-%m-%d') if pd.notna(row["Fecha"]) else "N/A"
             self.tabla_produccion.setItem(i, 0, QTableWidgetItem(fecha_str))
-            
             self.tabla_produccion.setItem(i, 1, QTableWidgetItem(row["producto_unidad"]))
             
             dias_ordenados = ["L", "Ma", "Mi", "J", "V", "S", "D", "Total"]
@@ -316,35 +354,31 @@ class PanelInferiorRedisenado(QWidget):
                 val = row.get(dia, 0)
                 item = QTableWidgetItem(f"{val:.2f}")
                 self.tabla_produccion.setItem(i, j, item)
-                if dia == "Total": total_produccion += val
-            
-            for j, col in enumerate(["Costo Total", "Precio Venta", "Ganancia"], start=10):
-                val = row[col]
-                item = QTableWidgetItem(f"${val:,.2f}")
-                self.tabla_produccion.setItem(i, j, item)
-                if col == "Costo Total": total_costo += val
-                elif col == "Precio Venta": total_venta += val
-                elif col == "Ganancia": total_ganancia += val
-
-        self.actualizar_metricas(total_produccion, total_costo, total_venta, total_ganancia)
 
     def exportar_a_excel(self):
-        """Exporta los datos actuales a un archivo Excel"""
+        """Exporta los datos a Excel"""
         try:
             fecha_actual = datetime.now().strftime("%Y-%m-%d")
             nombre_archivo = f"reporte_produccion_{fecha_actual}.xlsx"
             
             with pd.ExcelWriter(nombre_archivo, engine='openpyxl') as writer:
-                self.df_produccion.to_excel(writer, sheet_name='Producción', index=False)
+                if not self.df_produccion.empty:
+                    self.df_produccion.to_excel(writer, sheet_name='Producción', index=False)
+                
+                if not self.df_mp.empty:
+                    self.df_mp.to_excel(writer, sheet_name='Materias Primas', index=False)
+                
+                if not self.df_reventa.empty:
+                    self.df_reventa.to_excel(writer, sheet_name='Productos Reventa', index=False)
                 
                 # Crear hoja de resumen
                 resumen_data = {
-                    'Métrica': ['Producción Total', 'Costo Total', 'Venta Total', 'Ganancia Total'],
+                    'Métrica': ['Productos Producidos', 'Costo Producción', 'Stock MP', 'Stock Reventa'],
                     'Valor': [
                         self.metrica_produccion.valor_label.text(),
-                        self.metrica_costo.valor_label.text(),
-                        self.metrica_venta.valor_label.text(),
-                        self.metrica_ganancia.valor_label.text()
+                        self.metrica_costo_produccion.valor_label.text(),
+                        self.metrica_stock_mp.valor_label.text(),
+                        self.metrica_stock_reventa.valor_label.text()
                     ]
                 }
                 pd.DataFrame(resumen_data).to_excel(writer, sheet_name='Resumen', index=False)

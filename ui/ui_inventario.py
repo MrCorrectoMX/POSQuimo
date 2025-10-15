@@ -1,4 +1,4 @@
-# ui/ui_inventario.py (modificado)
+# ui/ui_inventario.py (COMPLETO Y ACTUALIZADO)
 
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
@@ -16,6 +16,8 @@ from sqlalchemy import text
 from ui.ui_panel_derecho import PanelDerecho
 from ui.ui_panel_inferior import PanelInferiorRedisenado
 from .ui_pos import POSWindow
+from .ui_panel_ventas import PanelVentas
+from .ui_panel_fondo import PanelFondo
 
 import sys
 import os
@@ -46,16 +48,32 @@ class AdminWidget(QWidget):
         
         # --- Pestaña 1: Gestión de Producción ---
         self.tab_produccion = QWidget()
-        self.tabs.addTab(self.tab_produccion, "Gestión de Producción")
+        self.tabs.addTab(self.tab_produccion, "Producción")
         
         # Solo el panel inferior en esta pestaña
         tab_produccion_layout = QVBoxLayout(self.tab_produccion)
         self.panel_inferior = PanelInferiorRedisenado(self.engine)
         tab_produccion_layout.addWidget(self.panel_inferior)
         
-        # --- Pestaña 2: Gestión de Inventario y Ventas ---
+        # --- Pestaña 2: Panel de Ventas ---
+        self.tab_ventas = QWidget()
+        self.tabs.addTab(self.tab_ventas, "Ventas")
+        
+        tab_ventas_layout = QVBoxLayout(self.tab_ventas)
+        self.panel_ventas = PanelVentas(self.engine)
+        tab_ventas_layout.addWidget(self.panel_ventas)
+        
+        # --- Pestaña 3: Gestión de Fondos ---
+        self.tab_fondos = QWidget()
+        self.tabs.addTab(self.tab_fondos, "Fondos")
+        
+        tab_fondos_layout = QVBoxLayout(self.tab_fondos)
+        self.panel_fondos = PanelFondo(self.engine)
+        tab_fondos_layout.addWidget(self.panel_fondos)
+        
+        # --- Pestaña 4: Gestión de Inventario y Ventas (Original) ---
         self.tab_inventario_ventas = QWidget()
-        self.tabs.addTab(self.tab_inventario_ventas, "Gestión de Inventario y Ventas")
+        self.tabs.addTab(self.tab_inventario_ventas, "Inventario")
         
         # Usar un splitter horizontal para dividir esta pestaña
         splitter = QSplitter(Qt.Horizontal)
@@ -122,5 +140,11 @@ class InventarioApp(QMainWindow):
         """Cambia la vista activa en el QStackedWidget."""
         self.stacked_widget.setCurrentIndex(index)
         if index == 1:  # Si cambiamos al modo admin
-            # Cargar datos iniciales en el panel inferior
-            self.admin_widget.panel_inferior.cargar_datos_desde_db()
+            # Cargar datos iniciales en todos los paneles
+            try:
+                self.admin_widget.panel_inferior.cargar_datos_desde_db()
+                self.admin_widget.panel_ventas.cargar_ventas_desde_db()
+                self.admin_widget.panel_fondos.actualizar_saldo()
+                self.admin_widget.panel_fondos.cargar_movimientos()
+            except Exception as e:
+                print(f"Error al cargar datos iniciales: {e}")

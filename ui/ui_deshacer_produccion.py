@@ -68,30 +68,51 @@ class VentanaDeshacerProduccion(QDialog):
         # --- Cargar datos ---
         self.cargar_produccion_reciente()
     
+    def cargar_produccion_reciente(self):
+        """Carga los últimos 20 registros de producción para que el usuario elija."""
+        try:
+            with self.engine.connect() as conn:
+                # CONSULTA CORREGIDA - compatible con tu esquema
+                query = text("""
+                    SELECT pr.id_produccion, pr.fecha, p.nombre_producto, pr.cantidad
+                    FROM produccion pr
+                    JOIN productos p ON pr.producto_id = p.id_producto
+                    WHERE pr.cantidad > 0
+                    ORDER BY pr.id_produccion DESC
+                    LIMIT 20
+                """)
+                resultados = conn.execute(query).fetchall()
+
+                self.tabla_produccion.setRowCount(len(resultados))
+                for i, row in enumerate(resultados):
+                    self.tabla_produccion.setItem(i, 0, QTableWidgetItem(str(row[0])))
+                    self.tabla_produccion.setItem(i, 1, QTableWidgetItem(str(row[1])))
+                    self.tabla_produccion.setItem(i, 2, QTableWidgetItem(str(row[2])))
+                    self.tabla_produccion.setItem(i, 3, QTableWidgetItem(f"{row[3]:.2f}"))
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo cargar la producción reciente:\n{e}")
+
     def cargar_produccion(self):
         """Carga los registros de producción según el período seleccionado."""
         periodo = self.combo_periodo.currentText()
         hoy = datetime.now().date()
         
         if periodo == "Esta Semana":
-            # Lunes de esta semana
             fecha_inicio = hoy - timedelta(days=hoy.weekday())
             fecha_fin = hoy
         elif periodo == "Últimos 15 Días":
             fecha_inicio = hoy - timedelta(days=15)
             fecha_fin = hoy
         elif periodo == "Este Mes":
-            # Primer día del mes actual
             fecha_inicio = hoy.replace(day=1)
             fecha_fin = hoy
         else: # Meses Anteriores
-            # Todo lo que sea anterior al primer día de este mes
             fecha_fin = hoy.replace(day=1) - timedelta(days=1)
-            # Mostramos un rango amplio hacia atrás
             fecha_inicio = fecha_fin - relativedelta(years=5)
 
         try:
             with self.engine.connect() as conn:
+                # CONSULTA CORREGIDA - compatible con tu esquema
                 query = text("""
                     SELECT pr.id_produccion, pr.fecha, p.nombre_producto, pr.cantidad
                     FROM produccion pr

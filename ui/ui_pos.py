@@ -516,10 +516,10 @@ class POSWindow(QWidget):
             return
 
         try:
-            # 🔥 CAMBIO: Usar connect() en lugar de begin() para control manual de transacciones
             with self.engine.connect() as conn:
-                with conn.begin() as trans:  # Control manual de transacción
+                with conn.begin() as trans:
                     cliente_id = self._get_selected_client_id()
+                    total_venta = self.current_total
 
                     if not cliente_id:
                         query_cliente_general = text("SELECT id_cliente FROM clientes WHERE nombre_cliente = 'Cliente General'")
@@ -665,22 +665,74 @@ class POSWindow(QWidget):
                                 "total": total_linea
                             })
 
-                    # 🔥🔥🔥 HACER COMMIT INMEDIATO ANTES DE ACTUALIZAR LA UI 🔥🔥🔥
-                    trans.commit()
+                    # TERCERO: ACTUALIZAR FONDO - INGRESO POR VENTA
+                    query_ultimo_saldo = text("SELECT saldo FROM fondo ORDER BY id_movimiento DESC LIMIT 1")
+                    ultimo_saldo_result = conn.execute(query_ultimo_saldo).fetchone()
+                    ultimo_saldo = ultimo_saldo_result[0] if ultimo_saldo_result else 0
+                    
+                    nuevo_saldo = ultimo_saldo + total_venta
+                    
+                    query_fondo = text("""
+                        INSERT INTO fondo (fecha, tipo, concepto, monto, saldo)
+                        VALUES (DATE('now'), 'INGRESO', 'Venta POS', :monto, :saldo)
+                    """)
+                    conn.execute(query_fondo, {
+                        "monto": total_venta,
+                        "saldo": nuevo_saldo
+                    })
+
                     print("✅ Transacción commitada a la BD")
 
-            # 🔥🔥🔥 CORRECCIÓN: ESTO DEBE ESTAR FUERA del bloque with self.engine.connect() 🔥🔥🔥
             # ACTUALIZAR VISTA DESPUÉS DEL COMMIT
             self._force_immediate_refresh()
 
             # Si todo sale bien
             total_str = f"${self.current_total:,.2f}"
-            QMessageBox.information(self, "Venta Registrada", f"Venta realizada con éxito.\n\nTotal: {total_str}")
+            QMessageBox.information(self, "Venta Registrada", 
+                                f"Venta realizada con éxito.\n\nTotal: {total_str}\nFondo actualizado: +${total_venta:,.2f}")
             
             self._clear_ticket()
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo registrar la venta: {str(e)}")
+
+    def _force_immediate_refresh(self):
+        """Actualización que MANTIENE el layout pero actualiza stocks"""
+        try:
+            print("🔄 Actualización MANTENIENDO layout...")
+            
+            # 1. Leer datos FRESCOS desde BD
+            stocks_actualizados = {}
+            with self.engine.connect() as fresh_conn:
+                # Leer todos los productos actualizados
+                query_productos = text("SELECT nombre_producto, cantidad_producto FROM productos WHERE estatus_producto = 1")
+                for nombre, stock in fresh_conn.execute(query_productos).fetchall():
+                    stocks_actualizados[nombre] = stock
+                
+                query_reventa = text("SELECT nombre_prev, cantidad_prev FROM productosreventa WHERE estatus_prev = 1")  
+                for nombre, stock in fresh_conn.execute(query_reventa).fetchall():
+                    stocks_actualizados[nombre] = stock
+                    
+                query_mp = text("SELECT nombre_mp, cantidad_comprada_mp FROM materiasprimas WHERE estatus_mp = 1")
+                for nombre, stock in fresh_conn.execute(query_mp).fetchall():
+                    stocks_actualizados[nombre] = stock
+            
+            # 2. Actualizar stocks en la cache
+            for table_name in ["productos", "productosreventa", "materiasprimas"]:
+                if table_name in self.products_cache:
+                    productos_actualizados = []
+                    for nombre, stock_viejo in self.products_cache[table_name]:
+                        stock_actual = stocks_actualizados.get(nombre, stock_viejo)
+                        productos_actualizados.append((nombre, stock_actual))
+                    self.products_cache[table_name] = productos_actualizados
+            
+            # 3. ACTUALIZAR BOTONES EXISTENTES sin recrear el layout
+            self._update_existing_buttons_stocks(stocks_actualizados)
+            
+            print("✅ Stocks actualizados manteniendo layout")
+            
+        except Exception as e:
+            print(f"❌ Error actualizando stocks: {e}")
 
     def _force_immediate_refresh(self):
         """Actualización que MANTIENE el layout pero actualiza stocks"""
@@ -987,7 +1039,7 @@ class POSWindow(QWidget):
         menu.exec_(btn.mapToGlobal(position))
 
     def _agregar_materia_prima(self):
-        """Permite agregar una o más materias primas desde un diálogo"""
+        """Permite agregar una o más materias primas desde un diálogo y resta del fondo"""
         dialog = AgregarMultiplesMPDialog(self)
         if dialog.exec_() == QDialog.Accepted:
             materias_primas = dialog.get_materias_primas()
@@ -997,13 +1049,41 @@ class POSWindow(QWidget):
 
             try:
                 with self.engine.begin() as conn:
+                    total_gasto = 0
+                    
                     for mp in materias_primas:
+                        # Insertar materia prima
                         conn.execute(
-                            "INSERT INTO materiasprimas (nombre_mp, costo_unitario_mp) VALUES (:nombre, :costo)",
-                            {"nombre": mp["nombre"], "costo": mp["costo"]}
+                            text("""
+                                INSERT INTO materiasprimas (nombre_mp, costo_unitario_mp, proveedor, cantidad_comprada_mp)
+                                VALUES (:nombre, :costo, :proveedor, 0)
+                            """),
+                            {"nombre": mp["nombre"], "costo": mp["costo"], "proveedor": mp["proveedor"]}
                         )
-                QMessageBox.information(self, "Éxito", f"Se agregaron {len(materias_primas)} materias primas.")
+                        total_gasto += mp["costo"] * mp.get("cantidad", 1)
+                    
+                    # RESTAR DEL FONDO
+                    if total_gasto > 0:
+                        query_ultimo_saldo = text("SELECT saldo FROM fondo ORDER BY id_movimiento DESC LIMIT 1")
+                        ultimo_saldo_result = conn.execute(query_ultimo_saldo).fetchone()
+                        ultimo_saldo = ultimo_saldo_result[0] if ultimo_saldo_result else 0
+                        
+                        nuevo_saldo = ultimo_saldo - total_gasto
+                        
+                        query_fondo = text("""
+                            INSERT INTO fondo (fecha, tipo, concepto, monto, saldo)
+                            VALUES (DATE('now'), 'EGRESO', 'Compra Materia Prima', :monto, :saldo)
+                        """)
+                        conn.execute(query_fondo, {
+                            "monto": total_gasto,
+                            "saldo": nuevo_saldo
+                        })
+                    
+                QMessageBox.information(self, "Éxito", 
+                                    f"Se agregaron {len(materias_primas)} materias primas.\n"
+                                    f"Gasto del fondo: ${total_gasto:,.2f}")
                 self._populate_grids()
+                
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"No se pudo agregar las materias primas: {e}")
 
