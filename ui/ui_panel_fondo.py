@@ -25,7 +25,7 @@ class PanelFondo(QWidget):
         saldo_layout.addWidget(self.label_saldo)
         saldo_layout.addStretch()
         
-        btn_actualizar = QPushButton("🔄 Actualizar")
+        btn_actualizar = QPushButton("Actualizar")
         btn_actualizar.clicked.connect(self.actualizar_saldo)
         saldo_layout.addWidget(btn_actualizar)
         layout.addWidget(saldo_group)

@@ -1,4 +1,4 @@
-# ui/ui_panel_inferior_redisenado.py (VERSIÓN CORREGIDA - SIN ERROR DE LAYOUT)
+# ui/ui_panel_inferior_redisenado.py (VERSIÓN CON GESTIÓN DE PRESENTACIONES)
 
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QTableWidget, QTableWidgetItem,
@@ -10,6 +10,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 from sqlalchemy import text
 from .ui_deshacer_produccion import VentanaDeshacerProduccion
+from .ui_gestion_presentaciones import GestionPresentacionesDialog  # NUEVO IMPORT
+
 
 
 class TarjetaMetrica(QFrame):
@@ -50,7 +52,7 @@ class PanelInferiorRedisenado(QWidget):
         
         # --- Panel superior: Resumen y métricas ---
         self.panel_superior = QWidget()
-        panel_superior_layout = QVBoxLayout(self.panel_superior)  # Layout local
+        panel_superior_layout = QVBoxLayout(self.panel_superior)
         
         # Selector de período
         periodo_group = QGroupBox("Período de Análisis - Producción")
@@ -102,7 +104,7 @@ class PanelInferiorRedisenado(QWidget):
         # Pestaña de Producción
         self.tab_produccion = QWidget()
         self.tabs.addTab(self.tab_produccion, "Producción de Productos")
-        tab_produccion_layout = QVBoxLayout(self.tab_produccion)  # Layout local
+        tab_produccion_layout = QVBoxLayout(self.tab_produccion)
         
         # Tabla de producción con scroll
         scroll_area = QScrollArea()
@@ -128,12 +130,19 @@ class PanelInferiorRedisenado(QWidget):
         self.btn_deshacer.clicked.connect(self.abrir_ventana_deshacer)
         btn_layout.addWidget(self.btn_deshacer)
 
+        # NUEVO BOTÓN: Gestionar Presentaciones
+        # En el __init__, cambia el botón a:
+        self.btn_gestionar_presentaciones = QPushButton("Gestionar Presentaciones")
+        self.btn_gestionar_presentaciones.setStyleSheet("background-color: #28a745; color: white;")
+        self.btn_gestionar_presentaciones.clicked.connect(self.gestionar_presentaciones)
+        btn_layout.addWidget(self.btn_gestionar_presentaciones)
+
         tab_produccion_layout.addLayout(btn_layout)
         
         # Pestaña de Inventario
         self.tab_inventario = QWidget()
         self.tabs.addTab(self.tab_inventario, "Inventario MP y Reventa")
-        tab_inventario_layout = QVBoxLayout(self.tab_inventario)  # Layout local
+        tab_inventario_layout = QVBoxLayout(self.tab_inventario)
         
         # Tabla de Materias Primas
         self.tabla_mp = QTableWidget()
@@ -159,6 +168,207 @@ class PanelInferiorRedisenado(QWidget):
         
         # Cargar datos iniciales
         self.cargar_datos_desde_db()
+
+    # NUEVO MÉTODO: Gestión de Presentaciones
+    def gestionar_presentaciones(self):
+        """Abre el diálogo para gestionar presentaciones - VERSIÓN SQLITE PURO"""
+        current_row = self.tabla_produccion.currentRow()
+        if current_row < 0:
+            QMessageBox.warning(self, "Selección requerida", 
+                            "Por favor, seleccione un producto de la tabla de producción.")
+            return
+
+        producto_item = self.tabla_produccion.item(current_row, 1)
+        if not producto_item:
+            return
+
+        producto_text = producto_item.text()
+        producto_nombre = producto_text.split(" (")[0]
+
+        try:
+            # Obtener la ruta de la base de datos directamente
+            db_path = str(self.engine.url).replace('sqlite:///', '')
+            
+            # Usar SQLite directamente para obtener datos
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            # 1. Obtener el ID del producto
+            cursor.execute("SELECT id_producto FROM productos WHERE nombre_producto = ?", (producto_nombre,))
+            result = cursor.fetchone()
+            if not result:
+                QMessageBox.warning(self, "Error", "No se encontró el producto seleccionado.")
+                conn.close()
+                return
+            producto_id = result[0]
+
+            # 2. Obtener las presentaciones actuales
+            cursor.execute("""
+                SELECT id_presentacion, nombre_presentacion, factor, id_envase, costo_envase
+                FROM presentaciones 
+                WHERE id_producto = ?
+                ORDER BY nombre_presentacion
+            """, (producto_id,))
+            
+            presentaciones_actuales_raw = cursor.fetchall()
+            presentaciones_actuales = [
+                {
+                    'id_presentacion': row[0],
+                    'nombre_presentacion': row[1],
+                    'factor': row[2],
+                    'id_envase': row[3],
+                    'costo_envase': row[4] or 0.0
+                }
+                for row in presentaciones_actuales_raw
+            ]
+
+            # 3. Obtener envases disponibles
+            cursor.execute("""
+                SELECT id_envase, nombre_envase, costo_envase
+                FROM envases_etiquetas
+                ORDER BY nombre_envase
+            """)
+            
+            envases_disponibles_raw = cursor.fetchall()
+            envases_disponibles = [
+                {
+                    'id_envase': row[0],
+                    'nombre_envase': row[1],
+                    'costo_envase': row[2] or 0.0
+                }
+                for row in envases_disponibles_raw
+            ]
+
+            conn.close()
+
+            # 4. Mostrar diálogo
+            dialogo = GestionPresentacionesDialog(
+                producto_nombre, 
+                producto_id, 
+                presentaciones_actuales, 
+                envases_disponibles, 
+                self
+            )
+            
+            if dialogo.exec_() == QDialog.Accepted:
+                nuevas_presentaciones = dialogo.get_presentaciones()
+                
+                # 5. Guardar usando SQLite directamente
+                self._guardar_con_sqlite_directo(db_path, producto_id, nuevas_presentaciones, presentaciones_actuales)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudieron gestionar las presentaciones: {e}")
+
+    def _guardar_con_sqlite_directo(self, db_path, producto_id, nuevas_presentaciones, presentaciones_actuales):
+        """Guarda presentaciones usando SQLite directamente - SIN SQLAlchemy"""
+        try:
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            try:
+                # Identificar presentaciones a eliminar
+                nombres_actuales = {pres['nombre_presentacion'] for pres in presentaciones_actuales}
+                nombres_nuevos = {pres['nombre_presentacion'] for pres in nuevas_presentaciones}
+                
+                presentaciones_a_eliminar = nombres_actuales - nombres_nuevos
+                for nombre_eliminar in presentaciones_a_eliminar:
+                    cursor.execute(
+                        "DELETE FROM presentaciones WHERE id_producto = ? AND nombre_presentacion = ?",
+                        (producto_id, nombre_eliminar)
+                    )
+
+                # Insertar o actualizar presentaciones
+                for pres in nuevas_presentaciones:
+                    # Verificar si ya existe
+                    cursor.execute(
+                        "SELECT id_presentacion FROM presentaciones WHERE id_producto = ? AND nombre_presentacion = ?",
+                        (producto_id, pres['nombre_presentacion'])
+                    )
+                    existe = cursor.fetchone()
+
+                    if existe:
+                        # Actualizar
+                        cursor.execute(
+                            "UPDATE presentaciones SET factor = ?, id_envase = ?, costo_envase = ? WHERE id_presentacion = ?",
+                            (pres['factor'], pres['id_envase'], pres['costo_envase'], existe[0])
+                        )
+                    else:
+                        # Insertar nuevo
+                        cursor.execute(
+                            "INSERT INTO presentaciones (id_producto, nombre_presentacion, factor, id_envase, costo_envase) VALUES (?, ?, ?, ?, ?)",
+                            (producto_id, pres['nombre_presentacion'], pres['factor'], pres['id_envase'], pres['costo_envase'])
+                        )
+                
+                conn.commit()
+                
+                QMessageBox.information(self, "Éxito", "Presentaciones actualizadas correctamente.")
+                self.cargar_datos_desde_db()
+                
+            except Exception as e:
+                conn.rollback()
+                raise e
+            finally:
+                conn.close()
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudieron guardar las presentaciones: {e}")
+
+    def _guardar_presentaciones_simple(self, producto_id, nuevas_presentaciones, presentaciones_actuales):
+        """Guarda presentaciones - VERSIÓN CONEXIÓN DIRECTA"""
+        try:
+            # Obtener una conexión directa del pool
+            raw_connection = self.engine.raw_connection()
+            try:
+                cursor = raw_connection.cursor()
+                
+                # Identificar presentaciones a eliminar
+                nombres_actuales = {pres['nombre_presentacion'] for pres in presentaciones_actuales}
+                nombres_nuevos = {pres['nombre_presentacion'] for pres in nuevas_presentaciones}
+                
+                presentaciones_a_eliminar = nombres_actuales - nombres_nuevos
+                for nombre_eliminar in presentaciones_a_eliminar:
+                    cursor.execute(
+                        "DELETE FROM presentaciones WHERE id_producto = ? AND nombre_presentacion = ?",
+                        (producto_id, nombre_eliminar)
+                    )
+
+                # Insertar o actualizar presentaciones
+                for pres in nuevas_presentaciones:
+                    cursor.execute(
+                        "SELECT id_presentacion FROM presentaciones WHERE id_producto = ? AND nombre_presentacion = ?",
+                        (producto_id, pres['nombre_presentacion'])
+                    )
+                    existe = cursor.fetchone()
+
+                    if existe:
+                        cursor.execute(
+                            "UPDATE presentaciones SET factor = ?, id_envase = ?, costo_envase = ? WHERE id_presentacion = ?",
+                            (pres['factor'], pres['id_envase'], pres['costo_envase'], existe[0])
+                        )
+                    else:
+                        cursor.execute(
+                            "INSERT INTO presentaciones (id_producto, nombre_presentacion, factor, id_envase, costo_envase) VALUES (?, ?, ?, ?, ?)",
+                            (producto_id, pres['nombre_presentacion'], pres['factor'], pres['id_envase'], pres['costo_envase'])
+                        )
+                
+                raw_connection.commit()
+                
+                QMessageBox.information(self, "Éxito", "Presentaciones actualizadas correctamente.")
+                self.cargar_datos_desde_db()
+                
+            except Exception as e:
+                raw_connection.rollback()
+                raise e
+            finally:
+                raw_connection.close()
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudieron guardar las presentaciones: {e}")
+
+
+
 
     def abrir_ventana_deshacer(self):
         """Abre la ventana de diálogo para seleccionar y deshacer una producción."""
@@ -223,6 +433,7 @@ class PanelInferiorRedisenado(QWidget):
                 ORDER BY pr.fecha, p.nombre_producto
             """)
             
+            # PROBLEMA: pandas.read_sql_query puede estar iniciando transacciones automáticamente
             self.df_produccion = pd.read_sql_query(
                 query_produccion, self.engine, 
                 params={"start_date": fecha_desde, "end_date": fecha_hasta}
@@ -387,3 +598,4 @@ class PanelInferiorRedisenado(QWidget):
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo exportar el reporte: {e}")
+

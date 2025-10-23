@@ -41,7 +41,7 @@ class DialogoCorteSemanal(QDialog):
     """Diálogo para mostrar el reporte detallado del corte semanal"""
     def __init__(self, reporte_data, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("📊 Reporte de Corte Semanal")
+        self.setWindowTitle(" Reporte de Corte Semanal")
         self.setMinimumSize(600, 500)
         self.reporte_data = reporte_data
         
@@ -153,15 +153,15 @@ class DialogoCorteSemanal(QDialog):
         
         # Botones
         btn_layout = QHBoxLayout()
-        btn_exportar = QPushButton("💾 Exportar a Excel")
+        btn_exportar = QPushButton("Exportar a Excel")
         btn_exportar.setStyleSheet("background-color: #28a745; color: white; font-weight: bold; padding: 8px;")
         btn_exportar.clicked.connect(self.exportar_excel)
         
-        btn_confirmar = QPushButton("✅ Confirmar Corte")
+        btn_confirmar = QPushButton("Confirmar Corte")
         btn_confirmar.setStyleSheet("background-color: #007bff; color: white; font-weight: bold; padding: 8px;")
         btn_confirmar.clicked.connect(self.confirmar_corte)
         
-        btn_cancelar = QPushButton("❌ Cancelar")
+        btn_cancelar = QPushButton("Cancelar")
         btn_cancelar.clicked.connect(self.reject)
         
         btn_layout.addWidget(btn_exportar)
@@ -247,15 +247,12 @@ class PanelVentas(QWidget):
         filtros_layout.addWidget(self.btn_aplicar)
         
         # BOTÓN DE CORTE SEMANAL
-        self.btn_corte_semanal = QPushButton("📅 Corte Semanal")
+        self.btn_corte_semanal = QPushButton("Corte Semanal")
         self.btn_corte_semanal.setStyleSheet("background-color: #f5b041; color: black; font-weight: bold; padding: 8px;")
         self.btn_corte_semanal.clicked.connect(self.realizar_corte_semanal)
         self.btn_corte_semanal.setToolTip("Generar reporte y reiniciar semana")
         filtros_layout.addWidget(self.btn_corte_semanal)
         
-        self.btn_exportar = QPushButton("📊 Exportar Excel")
-        self.btn_exportar.clicked.connect(self.exportar_a_excel)
-        filtros_layout.addWidget(self.btn_exportar)
         
         filtros_layout.addStretch()
         main_layout.addWidget(filtros_group)
@@ -281,22 +278,22 @@ class PanelVentas(QWidget):
         
         # Pestaña 1: Resumen de Ventas por Producto
         self.tab_resumen = QWidget()
-        self.tabs.addTab(self.tab_resumen, "📈 Resumen por Producto")
+        self.tabs.addTab(self.tab_resumen, "Resumen por Producto")
         self._setup_tab_resumen()
         
         # Pestaña 2: Detalle de Ventas
         self.tab_detalle = QWidget()
-        self.tabs.addTab(self.tab_detalle, "📋 Detalle de Ventas")
+        self.tabs.addTab(self.tab_detalle, "Detalle de Ventas")
         self._setup_tab_detalle()
         
         # Pestaña 3: Ventas por Cliente
         self.tab_clientes = QWidget()
-        self.tabs.addTab(self.tab_clientes, "👥 Ventas por Cliente")
+        self.tabs.addTab(self.tab_clientes, "Ventas por Cliente")
         self._setup_tab_clientes()
 
         # Pestaña 4: Ventas por Día
         self.tab_diario = QWidget()
-        self.tabs.addTab(self.tab_diario, "📅 Ventas por Día")
+        self.tabs.addTab(self.tab_diario, "Ventas por Día")
         self._setup_tab_diario()
         
         # Cargar datos iniciales
@@ -410,7 +407,6 @@ class PanelVentas(QWidget):
                     f"✅ Corte semanal realizado con éxito.\n\n"
                     f"• {len(df_todas_ventas)} ventas archivadas en la base de datos\n"
                     f"• Contadores reiniciados para nueva semana\n"
-                    f"• Reporte guardado en archivo Excel"
                 )
 
         except Exception as e:
@@ -570,17 +566,17 @@ class PanelVentas(QWidget):
             
             # Combinar ventas de productos normales y reventa
             query_ventas = text("""
-                SELECT 
-                    v.fecha_venta as fecha,
-                    COALESCE(c.nombre_cliente, 'Cliente General') as cliente,
-                    v.nombre_producto as producto,
-                    v.tipo_tabla as tipo,
-                    v.cantidad as cantidad,
-                    v.total as total,
-                    (v.total / NULLIF(v.cantidad, 0)) as precio_unitario
-                FROM ventas v
-                LEFT JOIN clientes c ON v.id_cliente = c.id_cliente
-                WHERE v.fecha_venta BETWEEN :start_date AND :end_date
+                   SELECT 
+                        v.fecha_venta as fecha,
+                        COALESCE(c.nombre_cliente, 'Cliente General') as cliente, 
+                        v.nombre_producto as producto,
+                        v.tipo_tabla as tipo,
+                        v.cantidad as cantidad,
+                        v.total as total,
+                        (v.total / NULLIF(v.cantidad, 0)) as precio_unitario
+                    FROM ventas v
+                    LEFT JOIN clientes c ON v.id_cliente = c.id_cliente
+                    WHERE v.fecha_venta BETWEEN :start_date AND :end_date
                 
                 UNION ALL
                 

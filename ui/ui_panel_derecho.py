@@ -9,6 +9,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from sqlalchemy import text
 
 
+
 class PanelDerecho(QWidget):
     # Señal para notificar cuando se actualizan los datos
     datos_actualizados = pyqtSignal()
@@ -26,20 +27,7 @@ class PanelDerecho(QWidget):
         self.tabs = QTabWidget()
         self.layout().addWidget(self.tabs)
         
-        # Pestaña de Gestión (simplificada)
-        self.tab_gestion = QWidget()
-        self.tabs.addTab(self.tab_gestion, "Gestión de Inventario")
-        self._setup_tab_gestion()
-        
-        # Pestaña de Producción
-        self.tab_produccion = QWidget()
-        self.tabs.addTab(self.tab_produccion, "Registro de Producción")
-        self._setup_tab_produccion()
-        
-        # Pestaña de Ventas
-        self.tab_ventas = QWidget()
-        self.tabs.addTab(self.tab_ventas, "Registro de Ventas")
-        self._setup_tab_ventas()
+
 
     def _setup_tab_gestion(self):
         layout = QVBoxLayout(self.tab_gestion)
@@ -139,22 +127,27 @@ class PanelDerecho(QWidget):
                 result = conn.execute(query)
                 
                 combo.clear()
+                # CORRECCIÓN: Acceder por índice numérico
                 for row in result:
-                    combo.addItem(row['nombre_producto'], row['id_producto'])
-                    
+                    id_producto = row[0]  # Primer elemento es el ID
+                    nombre_producto = row[1]  # Segundo elemento es el nombre
+                    combo.addItem(nombre_producto, id_producto)
+                        
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudieron cargar los productos: {e}")
 
     def cargar_clientes_combo(self):
         try:
             with self.engine.connect() as conn:
-                query = text("SELECT id_cliente, nombre FROM clientes ORDER BY nombre")
+                # CORRECCIÓN: Usar nombre_cliente
+                query = text("SELECT id_cliente, nombre_cliente FROM clientes ORDER BY nombre_cliente")
                 result = conn.execute(query)
                 
                 self.combo_cliente.clear()
                 for row in result:
-                    self.combo_cliente.addItem(row['nombre'], row['id_cliente'])
-                    
+                    # Acceder por índice numérico
+                    self.combo_cliente.addItem(row[1], row[0])  # nombre_cliente, id_cliente
+                        
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudieron cargar los clientes: {e}")
 
@@ -201,120 +194,4 @@ class PanelDerecho(QWidget):
             self.input_area.clear()
         self.input_cantidad.setValue(0)
 
-    def registrar_produccion(self):
-        producto_id = self.combo_producto_produccion.currentData()
-        cantidad = self.input_cantidad_produccion.value()
-
-        if not producto_id or cantidad <= 0:
-            QMessageBox.warning(self, "Error", "Seleccione un producto y una cantidad válida.")
-            return
-
-        try:
-            # Determinar tipo de producto (productos, productosreventa, materiasprimas)
-            tipo_tabla = self.current_table_type  # Debes actualizar este valor según selección en tu UI
-            tabla_nombre = {
-                "productos": "productos",
-                "productosreventa": "productosreventa",
-                "materiasprimas": "materiasprimas"
-            }.get(tipo_tabla, "productos")
-
-            campo_nombre = {
-                "productos": "nombre_producto",
-                "productosreventa": "nombre_prev",
-                "materiasprimas": "nombre_mp"
-            }.get(tipo_tabla, "nombre_producto")
-
-            campo_cantidad = {
-                "productos": "cantidad_producto",
-                "productosreventa": "cantidad_prev",
-                "materiasprimas": "cantidad_mp"
-            }.get(tipo_tabla, "cantidad_producto")
-
-            campo_area = {
-                "productos": "area_producto",
-                "productosreventa": "area_prev",
-                "materiasprimas": "area_mp"
-            }.get(tipo_tabla, "area_producto")
-
-            with self.engine.connect() as conn:
-                # Obtener información del producto
-                query = text(f"SELECT {campo_nombre}, {campo_area} FROM {tabla_nombre} WHERE id_{tabla_nombre[:-1]} = :id")
-                result = conn.execute(query, {"id": producto_id}).fetchone()
-
-                if not result:
-                    QMessageBox.warning(self, "Error", "Producto no encontrado.")
-                    return
-
-                nombre_producto = result[campo_nombre]
-                area = result[campo_area]
-
-                # Calcular costo (puedes implementar tu lógica aquí)
-                costo = 0
-
-                # Callback opcional
-                if self.callback_registro_produccion:
-                    self.callback_registro_produccion(nombre_producto, cantidad, area, costo)
-
-                # Actualizar cantidad en inventario
-                query_update = text(f"UPDATE {tabla_nombre} SET {campo_cantidad} = {campo_cantidad} + :cantidad WHERE id_{tabla_nombre[:-1]} = :id")
-                conn.execute(query_update, {"cantidad": cantidad, "id": producto_id})
-                conn.commit()
-
-            QMessageBox.information(self, "Éxito", f"Producción de {cantidad} unidades de {nombre_producto} registrada.")
-            self.input_cantidad_produccion.setValue(1)
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo registrar la producción: {e}")
-
-
-    def registrar_venta(self):
-        producto_id = self.combo_producto_venta.currentData()
-        cantidad = self.input_cantidad_venta.value()
-        cliente_id = self.combo_cliente.currentData()
-        
-        if not producto_id or cantidad <= 0 or not cliente_id:
-            QMessageBox.warning(self, "Error", "Complete todos los campos correctamente.")
-            return
-            
-        try:
-            # Verificar stock disponible
-            with self.engine.connect() as conn:
-                query_stock = text("SELECT cantidad_producto, nombre_producto FROM productos WHERE id_producto = :id")
-                result = conn.execute(query_stock, {"id": producto_id}).fetchone()
-                
-                if not result:
-                    QMessageBox.warning(self, "Error", "Producto no encontrado.")
-                    return
-                    
-                stock_actual = result['cantidad_producto']
-                nombre_producto = result['nombre_producto']
-                
-                if stock_actual < cantidad:
-                    QMessageBox.warning(self, "Error", f"Stock insuficiente. Solo hay {stock_actual} unidades disponibles.")
-                    return
-                
-                # Registrar la venta
-                query_venta = text("""
-                    INSERT INTO ventas (producto_id, cliente_id, cantidad, fecha_venta)
-                    VALUES (:producto_id, :cliente_id, :cantidad, DATE('now'))
-                """)
-                conn.execute(query_venta, {
-                    "producto_id": producto_id,
-                    "cliente_id": cliente_id,
-                    "cantidad": cantidad
-                })
-                
-                # Actualizar el stock
-                query_update = text("UPDATE productos SET cantidad_producto = cantidad_producto - :cantidad WHERE id_producto = :id")
-                conn.execute(query_update, {"cantidad": cantidad, "id": producto_id})
-                
-                conn.commit()
-                
-            QMessageBox.information(self, "Éxito", f"Venta de {cantidad} unidades de {nombre_producto} registrada.")
-            self.input_cantidad_venta.setValue(1)
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo registrar la venta: {e}")
-
-    
-    
+   
