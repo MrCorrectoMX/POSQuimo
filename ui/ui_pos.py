@@ -1982,24 +1982,10 @@ class POSWindow(QWidget):
                         QMessageBox.warning(self, "Stock Insuficiente", mensaje_error)
                         return
                     
-                    # Calcular costo total de producción
+                    # Calcular costo total de producción (solo informativo, no se descuenta)
                     costo_total_produccion = costo_por_unidad * cantidad_a_producir
                     
-                    # Verificar que hay suficiente fondo
-                    query_fondo = text("SELECT saldo FROM fondo ORDER BY id_movimiento DESC LIMIT 1")
-                    saldo_actual = conn.execute(query_fondo).scalar() or 0
-                    
-                    if saldo_actual < costo_total_produccion:
-                        QMessageBox.warning(
-                            self, 
-                            "Fondo Insuficiente", 
-                            f"Fondo disponible: ${saldo_actual:,.2f}\n"
-                            f"Costo de producción: ${costo_total_produccion:,.2f}\n\n"
-                            f"No hay suficiente dinero en el fondo para realizar esta producción."
-                        )
-                        return
-                    
-                    # Confirmar la producción
+                    # Confirmar la producción (SIN DESCONTAR DEL FONDO)
                     confirmacion = QMessageBox.question(
                         self,
                         "Confirmar Producción",
@@ -2008,7 +1994,7 @@ class POSWindow(QWidget):
                         f"Costo por unidad: ${costo_por_unidad:.2f}\n"
                         f"Costo total: ${costo_total_produccion:,.2f}\n"
                         f"Precio venta: ${precio_venta_nuevo:.2f} c/u\n\n"
-                        f"Esta cantidad se descontará del fondo y se consumirán las materias primas necesarias.",
+                        f"Se consumirán las materias primas necesarias del inventario.",
                         QMessageBox.Yes | QMessageBox.No
                     )
                     
@@ -2023,8 +2009,14 @@ class POSWindow(QWidget):
             QMessageBox.critical(self, "Error", f"No se pudo procesar la producción: {e}")
 
 
+    # CORRECCIÓN para ui_pos.py
+# Reemplaza el método _procesar_produccion_producto con esta versión corregida:
+
     def _procesar_produccion_producto(self, id_producto, product_name, cantidad, costo_unitario, costo_total, precio_venta, unidad_medida, ingredientes):
-        """Procesa la producción de un producto normal y actualiza fondos y materias primas"""
+        """
+        Procesa la producción de un producto normal.
+        CORREGIDO: No descuenta del fondo, solo consume materias primas
+        """
         try:
             with self.engine.begin() as conn:
                 # 1. ACTUALIZAR STOCK DEL PRODUCTO
@@ -2049,40 +2041,46 @@ class POSWindow(QWidget):
                         }
                     )
                 
-                # 3. RESTAR DEL FONDO (costo de producción)
-                query_ultimo_saldo = text("SELECT saldo FROM fondo ORDER BY id_movimiento DESC LIMIT 1")
-                ultimo_saldo_result = conn.execute(query_ultimo_saldo).fetchone()
-                ultimo_saldo = ultimo_saldo_result[0] if ultimo_saldo_result else 0
+                # 3. REGISTRAR EN PRODUCCIÓN - CORRECCIÓN PARA MANEJAR RESTRICCIÓN UNIQUE
+                # Primero verificar si ya existe un registro para hoy
+                query_existe = text("""
+                    SELECT COUNT(*) FROM produccion 
+                    WHERE fecha = DATE('now') AND producto_id = :producto_id
+                """)
+                existe = conn.execute(query_existe, {"producto_id": id_producto}).scalar()
                 
-                nuevo_saldo = ultimo_saldo - costo_total
+                if existe:
+                    # Actualizar registro existente
+                    conn.execute(
+                        text("""
+                            UPDATE produccion 
+                            SET cantidad = cantidad + :cantidad, 
+                                costo = costo + :costo,
+                                dia = DATE('now')
+                            WHERE fecha = DATE('now') AND producto_id = :producto_id
+                        """),
+                        {
+                            "producto_id": id_producto,
+                            "cantidad": cantidad,
+                            "costo": costo_total
+                        }
+                    )
+                else:
+                    # Insertar nuevo registro
+                    conn.execute(
+                        text("""
+                            INSERT INTO produccion (fecha, producto_id, cantidad, costo, area, dia)
+                            VALUES (DATE('now'), :producto_id, :cantidad, :costo, :area, DATE('now'))
+                        """),
+                        {
+                            "producto_id": id_producto,
+                            "cantidad": cantidad,
+                            "costo": costo_total,
+                            "area": "Producción"
+                        }
+                    )
                 
-                conn.execute(
-                    text("""
-                        INSERT INTO fondo (fecha, tipo, concepto, monto, saldo)
-                        VALUES (DATE('now'), 'EGRESO', :concepto, :monto, :saldo)
-                    """),
-                    {
-                        "concepto": f"Producción {product_name}",
-                        "monto": costo_total,
-                        "saldo": nuevo_saldo
-                    }
-                )
-                
-                # 4. REGISTRAR EN PRODUCCIÓN
-                conn.execute(
-                    text("""
-                        INSERT INTO produccion (fecha, producto_id, cantidad, costo, area, dia)
-                        VALUES (DATE('now'), :producto_id, :cantidad, :costo, :area, DATE('now'))
-                    """),
-                    {
-                        "producto_id": id_producto,
-                        "cantidad": cantidad,
-                        "costo": costo_total,
-                        "area": "Producción"  # O puedes obtener el área del producto
-                    }
-                )
-            
-            # 5. ACTUALIZAR INTERFAZ
+            # 4. ACTUALIZAR INTERFAZ
             QMessageBox.information(
                 self, 
                 "Producción Exitosa", 
@@ -2092,15 +2090,14 @@ class POSWindow(QWidget):
                 f"Costo unitario: ${costo_unitario:.2f}\n"
                 f"Costo total: ${costo_total:,.2f}\n"
                 f"Precio venta: ${precio_venta:.2f} c/u\n\n"
-                f"Fondo actualizado: -${costo_total:,.2f}"
+                f"✅ Se consumieron las materias primas necesarias del inventario."
             )
             
-            # 6. REFRESCAR LA VISTA
+            # 5. REFRESCAR LA VISTA
             self._populate_grids()
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo completar la producción: {e}")
-
+            QMessageBox.critical(self, "Error", f"❌ No se pudo completar la producción: {e}")
 
     def _eliminar_materia_prima(self, product_name):
         """Elimina COMPLETAMENTE una materia prima de la BD"""
