@@ -1,4 +1,4 @@
-# ui/ui_inventario.py (COMPLETO Y ACTUALIZADO)
+# ui/ui_inventario.py (MODIFICADO PARA POSTGRESQL)
 
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
@@ -9,8 +9,11 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer
 import pandas as pd
 import traceback
+import configparser
+import os
+import sys
 
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 
 from ui.ui_panel_derecho import PanelDerecho
 from ui.ui_panel_inferior import PanelInferiorRedisenado
@@ -19,8 +22,6 @@ from .ui_panel_ventas import PanelVentas
 from .ui_panel_fondo import PanelFondo
 from .ui_registro_clientes import RegistroClientesWidget
 
-import sys
-import os
 
 def get_project_root():
     """
@@ -31,6 +32,73 @@ def get_project_root():
         return os.path.dirname(sys.executable)
     else:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+
+def crear_engine_bd():
+    """
+    Crea el engine de SQLAlchemy según la configuración en config.ini
+    Soporta PostgreSQL y SQLite
+    """
+    config = configparser.ConfigParser()
+    config_path = os.path.join(get_project_root(), 'config.ini')
+    
+    # Valores por defecto si no existe config.ini
+    db_type = 'sqlite'
+    
+    if os.path.exists(config_path):
+        config.read(config_path)
+        db_type = config.get('database', 'db_type', fallback='sqlite')
+    else:
+        print("ADVERTENCIA: config.ini no encontrado, usando SQLite por defecto")
+    
+    if db_type == 'postgresql':
+        try:
+            host = config.get('database', 'host')
+            port = config.get('database', 'port')
+            dbname = config.get('database', 'dbname')
+            user = config.get('database', 'user')
+            password = config.get('database', 'password')
+            
+            # Crear URL de conexión PostgreSQL CON CODIFICACIÓN UTF-8
+            db_url = f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
+            
+            print(f"🔗 Conectando a PostgreSQL: {host}:{port}/{dbname}")
+            
+            # Engine con parámetros de codificación
+            engine = create_engine(
+                db_url, 
+                echo=False, 
+                pool_pre_ping=True,
+                connect_args={
+                    'client_encoding': 'utf8',
+                    'options': '-c client_encoding=utf8'
+                }
+            )
+            
+            # Verificar conexión
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            
+            print("Conexión PostgreSQL exitosa")
+            return engine
+            
+        except Exception as e:
+            print(f"ERROR conectando a PostgreSQL: {e}")
+            print("Cayendo a SQLite...")
+            db_type = 'sqlite'
+    
+    # Fallback a SQLite
+    if db_type == 'sqlite':
+        if os.path.exists(config_path):
+            sqlite_path = config.get('database', 'sqlite_path', fallback='quimo.db')
+        else:
+            sqlite_path = 'quimo.db'
+        
+        db_path = os.path.join(get_project_root(), sqlite_path)
+        print(f"🔗 Conectando a SQLite: {db_path}")
+        engine = create_engine(f"sqlite:///{db_path}", echo=False)
+        print("✅ Conexión SQLite exitosa")
+        return engine
 
 
 class AdminWidget(QWidget):
@@ -71,7 +139,7 @@ class AdminWidget(QWidget):
         self.panel_fondos = PanelFondo(self.engine)
         tab_fondos_layout.addWidget(self.panel_fondos)
         
-        # --- Pestaña 4: Gestión de Clientes (NUEVA PESTAÑA) ---
+        # --- Pestaña 4: Gestión de Clientes ---
         self.tab_clientes = QWidget()
         self.tabs.addTab(self.tab_clientes, "Clientes")
         
@@ -93,21 +161,28 @@ class AdminWidget(QWidget):
         splitter.addWidget(self.panel_derecho)
         
         # Configurar proporciones del splitter
-        splitter.setSizes([700])  # Solo un panel ahora
+        splitter.setSizes([700])
 
 
 class InventarioApp(QMainWindow):
     def __init__(self):
-        from sqlalchemy import create_engine
-        
         super().__init__()
         self.setWindowTitle("Sistema de Inventario - QUIMO")
         self.setMinimumSize(1200, 800)
         
-        # Conexión a la base de datos
-        db_path = os.path.join(get_project_root(), 'quimo.db')
-        print(f"DEBUG: Conectando a la base de datos en: {db_path}")
-        self.engine = create_engine(f"sqlite:///{db_path}", echo=False)
+        # ==========================================
+        # CAMBIO PRINCIPAL: Usar la función que detecta PostgreSQL o SQLite
+        # ==========================================
+        try:
+            self.engine = crear_engine_bd()
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error de Conexión",
+                f"No se pudo conectar a la base de datos:\n\n{e}\n\n"
+                f"Revisa el archivo config.ini"
+            )
+            sys.exit(1)
         
         # Variable para almacenar la tasa de cambio actual
         self.tasa_cambio_actual = self.obtener_tasa_cambio_guardada()
@@ -118,9 +193,9 @@ class InventarioApp(QMainWindow):
         
         # 2. Crear las instancias de los modos
         self.pos_widget = POSWindow(self.engine)
-        self.admin_widget = AdminWidget(self.engine)  # Ahora AdminWidget está definido antes
+        self.admin_widget = AdminWidget(self.engine)
         
-        # 3. Añadir los widgets al stack AHORA que ya existe
+        # 3. Añadir los widgets al stack
         self.stacked_widget.addWidget(self.pos_widget)
         self.stacked_widget.addWidget(self.admin_widget)
         
@@ -136,9 +211,8 @@ class InventarioApp(QMainWindow):
         """Intenta obtener la última tasa de cambio guardada en la base de datos"""
         try:
             with self.engine.connect() as conn:
-                # Buscar en una tabla de configuración o en la última materia prima en USD
                 query = text("""
-                    SELECT tasa_cambio FROM configuracion 
+                    SELECT valor FROM configuracion 
                     WHERE clave = 'tasa_cambio_usd' 
                     ORDER BY fecha_actualizacion DESC 
                     LIMIT 1
@@ -153,31 +227,31 @@ class InventarioApp(QMainWindow):
         return 20.0
 
     def guardar_tasa_cambio(self, tasa):
-        """Guarda la tasa de cambio en la base de datos para futuras sesiones"""
+        """Guarda la tasa de cambio en la base de datos"""
         try:
             with self.engine.begin() as conn:
                 # Crear tabla de configuración si no existe
                 conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS configuracion (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        id SERIAL PRIMARY KEY,
                         clave TEXT UNIQUE,
                         valor TEXT,
-                        fecha_actualizacion DATETIME DEFAULT CURRENT_TIMESTAMP
+                        fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """))
                 
                 # Insertar o actualizar la tasa
                 conn.execute(text("""
-                    INSERT OR REPLACE INTO configuracion (clave, valor)
-                    VALUES ('tasa_cambio_usd', :tasa)
+                    INSERT INTO configuracion (clave, valor, fecha_actualizacion)
+                    VALUES ('tasa_cambio_usd', :tasa, CURRENT_TIMESTAMP)
+                    ON CONFLICT (clave) 
+                    DO UPDATE SET valor = :tasa, fecha_actualizacion = CURRENT_TIMESTAMP
                 """), {"tasa": str(tasa)})
         except Exception as e:
             print(f"Error al guardar tasa de cambio: {e}")
 
     def mostrar_popup_tasa_cambio(self):
         """Muestra el popup para confirmar la tasa de cambio del dólar"""
-        from PyQt5.QtWidgets import QInputDialog
-        
         tasa, ok = QInputDialog.getDouble(
             self,
             "Tasa de Cambio USD/MXN",
@@ -202,7 +276,6 @@ class InventarioApp(QMainWindow):
                 f"todas las materias primas en dólares a pesos mexicanos."
             )
         else:
-            # Si el usuario cancela, usar la tasa guardada o por defecto
             QMessageBox.information(
                 self,
                 "Tasa de Cambio",
@@ -213,11 +286,9 @@ class InventarioApp(QMainWindow):
 
     def actualizar_tasa_cambio_desde_menu(self):
         """Permite actualizar la tasa de cambio desde el menú"""
-        from PyQt5.QtWidgets import QInputDialog
-        
         tasa, ok = QInputDialog.getDouble(
             self,
-            "💰 Actualizar Tasa de Cambio USD/MXN",
+            "Actualizar Tasa de Cambio USD/MXN",
             "Ingrese la nueva tasa de cambio actual:\n\n"
             "¿A cuántos pesos mexicanos equivale 1 dólar americano (USD)?",
             value=self.tasa_cambio_actual,
@@ -233,7 +304,7 @@ class InventarioApp(QMainWindow):
             QMessageBox.information(
                 self,
                 "Tasa de Cambio Actualizada",
-                f" Tasa de cambio actualizada:\n\n"
+                f"Tasa de cambio actualizada:\n\n"
                 f"1 USD = ${tasa:.2f} MXN\n\n"
                 f"Esta tasa se usará para todas las conversiones futuras."
             )
@@ -254,7 +325,7 @@ class InventarioApp(QMainWindow):
         # Añadir menú de configuración
         menu_config = menu_bar.addMenu("&Configuración")
         
-        accion_tasa_cambio = QAction("Actualizar Tasa de Cambio USD/MXN", self)
+        accion_tasa_cambio = QAction("💰 Actualizar Tasa de Cambio USD/MXN", self)
         accion_tasa_cambio.triggered.connect(self.actualizar_tasa_cambio_desde_menu)
         menu_config.addAction(accion_tasa_cambio)
 
@@ -262,13 +333,11 @@ class InventarioApp(QMainWindow):
         """Cambia la vista activa en el QStackedWidget."""
         self.stacked_widget.setCurrentIndex(index)
         if index == 1:  # Si cambiamos al modo admin
-            # Cargar datos iniciales en todos los paneles
             try:
                 self.admin_widget.panel_inferior.cargar_datos_desde_db()
                 self.admin_widget.panel_ventas.cargar_ventas_desde_db()
                 self.admin_widget.panel_fondos.actualizar_saldo()
                 self.admin_widget.panel_fondos.cargar_movimientos()
-                # AÑADIR: Cargar clientes cuando se cambie al modo admin
                 self.admin_widget.registro_clientes.cargar_clientes()
             except Exception as e:
                 print(f"Error al cargar datos iniciales: {e}")
