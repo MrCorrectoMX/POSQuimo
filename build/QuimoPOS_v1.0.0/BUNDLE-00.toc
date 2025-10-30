@@ -1,0 +1,3 @@
+([('QuimoPOS_v1.0.0',
+   '/Users/roy/Desktop/POSQuimo/dist/QuimoPOS_v1.0.0',
+   'EXECUTABLE')],)
