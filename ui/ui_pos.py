@@ -447,135 +447,119 @@ class POSWindow(QWidget):
     # En ui_pos.py, añadir este nuevo método
     # En ui_pos.py, después del método _modificar_formula
     def _gestionar_presentaciones(self, product_name):
-        """Abre el diálogo para gestionar presentaciones de un producto - VERSIÓN SEGURA"""
+        """Abre el diálogo para gestionar presentaciones de un producto - VERSIÓN POSTGRESQL"""
         try:
-            # CREAR UN ENGINE COMPLETAMENTE NUEVO para evitar conflictos
-            from sqlalchemy import create_engine
-            import os
+            with self.engine.connect() as conn:
+                # 1. Obtener el ID del producto
+                query_id = text("SELECT id_producto FROM productos WHERE nombre_producto = :nombre")
+                producto_id = conn.execute(query_id, {"nombre": product_name}).scalar()
+                if not producto_id:
+                    QMessageBox.warning(self, "Error", "No se encontró el producto.")
+                    return
+
+                # 2. Obtener las presentaciones actuales del producto
+                query_presentaciones = text("""
+                    SELECT id_presentacion, nombre_presentacion, factor, id_envase, costo_envase
+                    FROM presentaciones 
+                    WHERE id_producto = :id_producto
+                    ORDER BY nombre_presentacion
+                """)
+                presentaciones_actuales_raw = conn.execute(query_presentaciones, {"id_producto": producto_id}).fetchall()
+                presentaciones_actuales = [
+                    {
+                        'id_presentacion': row[0],
+                        'nombre_presentacion': row[1],
+                        'factor': row[2],
+                        'id_envase': row[3],
+                        'costo_envase': row[4] or 0.0
+                    }
+                    for row in presentaciones_actuales_raw
+                ]
+
+                # 3. Obtener envases disponibles
+                query_envases = text("""
+                    SELECT id_envase, nombre_envase, costo_envase
+                    FROM envases_etiquetas
+                    ORDER BY nombre_envase
+                """)
+                envases_disponibles_raw = conn.execute(query_envases).fetchall()
+                envases_disponibles = [
+                    {
+                        'id_envase': row[0],
+                        'nombre_envase': row[1],
+                        'costo_envase': row[2] or 0.0
+                    }
+                    for row in envases_disponibles_raw
+                ]
+
+            # 4. Crear y mostrar el diálogo
+            dialogo = GestionPresentacionesDialog(
+                product_name, 
+                producto_id, 
+                presentaciones_actuales, 
+                envases_disponibles, 
+                self
+            )
             
-            # Obtener la ruta de la base de datos del engine principal
-            db_url = str(self.engine.url)
-            db_path = db_url.replace('sqlite:///', '')
-            
-            # Crear engine independiente
-            independent_engine = create_engine(f"sqlite:///{db_path}")
-            
-            try:
-                with independent_engine.connect() as conn:
-                    # 1. Obtener el ID del producto
-                    query_id = text("SELECT id_producto FROM productos WHERE nombre_producto = :nombre")
-                    producto_id = conn.execute(query_id, {"nombre": product_name}).scalar()
-                    if not producto_id:
-                        QMessageBox.warning(self, "Error", "No se encontró el producto.")
-                        return
+            if dialogo.exec_() == QDialog.Accepted:
+                nuevas_presentaciones = dialogo.get_presentaciones()
 
-                    # 2. Obtener las presentaciones actuales del producto
-                    query_presentaciones = text("""
-                        SELECT id_presentacion, nombre_presentacion, factor, id_envase, costo_envase
-                        FROM presentaciones 
-                        WHERE id_producto = :id_producto
-                        ORDER BY nombre_presentacion
-                    """)
-                    presentaciones_actuales_raw = conn.execute(query_presentaciones, {"id_producto": producto_id}).fetchall()
-                    presentaciones_actuales = [
-                        {
-                            'id_presentacion': row[0],
-                            'nombre_presentacion': row[1],
-                            'factor': row[2],
-                            'id_envase': row[3],
-                            'costo_envase': row[4] or 0.0
-                        }
-                        for row in presentaciones_actuales_raw
-                    ]
+                # 5. Guardar usando el mismo engine de PostgreSQL
+                with self.engine.connect() as save_conn:
+                    with save_conn.begin() as trans:
+                        # Identificar presentaciones a eliminar
+                        nombres_actuales = {pres['nombre_presentacion'] for pres in presentaciones_actuales}
+                        nombres_nuevos = {pres['nombre_presentacion'] for pres in nuevas_presentaciones}
+                        
+                        presentaciones_a_eliminar = nombres_actuales - nombres_nuevos
+                        for nombre_eliminar in presentaciones_a_eliminar:
+                            save_conn.execute(
+                                text("DELETE FROM presentaciones WHERE id_producto = :id_p AND nombre_presentacion = :nombre"),
+                                {"id_p": producto_id, "nombre": nombre_eliminar}
+                            )
 
-                    # 3. Obtener envases disponibles
-                    query_envases = text("""
-                        SELECT id_envase, nombre_envase, costo_envase
-                        FROM envases_etiquetas
-                        ORDER BY nombre_envase
-                    """)
-                    envases_disponibles_raw = conn.execute(query_envases).fetchall()
-                    envases_disponibles = [
-                        {
-                            'id_envase': row[0],
-                            'nombre_envase': row[1],
-                            'costo_envase': row[2] or 0.0
-                        }
-                        for row in envases_disponibles_raw
-                    ]
+                        # Insertar o actualizar presentaciones
+                        for pres in nuevas_presentaciones:
+                            # Verificar si ya existe
+                            query_existe = text("""
+                                SELECT id_presentacion FROM presentaciones 
+                                WHERE id_producto = :id_p AND nombre_presentacion = :nombre
+                            """)
+                            existe = save_conn.execute(query_existe, {
+                                "id_p": producto_id, 
+                                "nombre": pres['nombre_presentacion']
+                            }).fetchone()
 
-                # 4. Crear y mostrar el diálogo FUERA de la conexión
-                dialogo = GestionPresentacionesDialog(
-                    product_name, 
-                    producto_id, 
-                    presentaciones_actuales, 
-                    envases_disponibles, 
-                    self
-                )
-                
-                if dialogo.exec_() == QDialog.Accepted:
-                    nuevas_presentaciones = dialogo.get_presentaciones()
-
-                    # 5. Guardar usando el mismo engine independiente
-                    with independent_engine.connect() as save_conn:
-                        with save_conn.begin() as trans:
-                            # Identificar presentaciones a eliminar
-                            nombres_actuales = {pres['nombre_presentacion'] for pres in presentaciones_actuales}
-                            nombres_nuevos = {pres['nombre_presentacion'] for pres in nuevas_presentaciones}
-                            
-                            presentaciones_a_eliminar = nombres_actuales - nombres_nuevos
-                            for nombre_eliminar in presentaciones_a_eliminar:
-                                save_conn.execute(
-                                    text("DELETE FROM presentaciones WHERE id_producto = :id_p AND nombre_presentacion = :nombre"),
-                                    {"id_p": producto_id, "nombre": nombre_eliminar}
-                                )
-
-                            # Insertar o actualizar presentaciones
-                            for pres in nuevas_presentaciones:
-                                # Verificar si ya existe
-                                query_existe = text("""
-                                    SELECT id_presentacion FROM presentaciones 
-                                    WHERE id_producto = :id_p AND nombre_presentacion = :nombre
+                            if existe:
+                                # Actualizar
+                                query_update = text("""
+                                    UPDATE presentaciones 
+                                    SET factor = :factor, id_envase = :id_envase, costo_envase = :costo_envase
+                                    WHERE id_presentacion = :id_pres
                                 """)
-                                existe = save_conn.execute(query_existe, {
-                                    "id_p": producto_id, 
-                                    "nombre": pres['nombre_presentacion']
-                                }).fetchone()
-
-                                if existe:
-                                    # Actualizar
-                                    query_update = text("""
-                                        UPDATE presentaciones 
-                                        SET factor = :factor, id_envase = :id_envase, costo_envase = :costo_envase
-                                        WHERE id_presentacion = :id_pres
-                                    """)
-                                    save_conn.execute(query_update, {
-                                        "factor": pres['factor'],
-                                        "id_envase": pres['id_envase'],
-                                        "costo_envase": pres['costo_envase'],
-                                        "id_pres": existe[0]
-                                    })
-                                else:
-                                    # Insertar nuevo
-                                    query_insert = text("""
-                                        INSERT INTO presentaciones (id_producto, nombre_presentacion, factor, id_envase, costo_envase)
-                                        VALUES (:id_p, :nombre, :factor, :id_envase, :costo_envase)
-                                    """)
-                                    save_conn.execute(query_insert, {
-                                        "id_p": producto_id,
-                                        "nombre": pres['nombre_presentacion'],
-                                        "factor": pres['factor'],
-                                        "id_envase": pres['id_envase'],
-                                        "costo_envase": pres['costo_envase']
-                                    })
-                    
-                    QMessageBox.information(self, "Éxito", "Presentaciones actualizadas correctamente.")
-                    # Recargar los productos para reflejar cambios
-                    self._populate_grids()
-
-            finally:
-                # Siempre cerrar el engine independiente
-                independent_engine.dispose()
+                                save_conn.execute(query_update, {
+                                    "factor": pres['factor'],
+                                    "id_envase": pres['id_envase'],
+                                    "costo_envase": pres['costo_envase'],
+                                    "id_pres": existe[0]
+                                })
+                            else:
+                                # Insertar nuevo
+                                query_insert = text("""
+                                    INSERT INTO presentaciones (id_producto, nombre_presentacion, factor, id_envase, costo_envase)
+                                    VALUES (:id_p, :nombre, :factor, :id_envase, :costo_envase)
+                                """)
+                                save_conn.execute(query_insert, {
+                                    "id_p": producto_id,
+                                    "nombre": pres['nombre_presentacion'],
+                                    "factor": pres['factor'],
+                                    "id_envase": pres['id_envase'],
+                                    "costo_envase": pres['costo_envase']
+                                })
+                
+                QMessageBox.information(self, "Éxito", "Presentaciones actualizadas correctamente.")
+                # Recargar los productos para reflejar cambios
+                self._populate_grids()
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudieron gestionar las presentaciones: {e}")
@@ -1713,7 +1697,7 @@ class POSWindow(QWidget):
                     
                     else:
                         # Si no tiene presentaciones, mostrar opción para gestionarlas
-                        accion_sin_presentaciones = QAction("📦 Gestionar Presentaciones...", self)
+                        accion_sin_presentaciones = QAction("Gestionar Presentaciones...", self)
                         accion_sin_presentaciones.triggered.connect(
                             lambda: self._gestionar_presentaciones(product_name)
                         )

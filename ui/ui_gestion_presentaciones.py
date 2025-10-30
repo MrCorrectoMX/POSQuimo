@@ -34,7 +34,7 @@ class GestionPresentacionesDialog(QDialog):
         layout.addWidget(self.combo_envase)
         
         # Botón agregar
-        btn_agregar = QPushButton("➕ Agregar Presentación")
+        btn_agregar = QPushButton("Agregar Presentación")
         btn_agregar.clicked.connect(self.agregar_presentacion)
         layout.addWidget(btn_agregar)
         
@@ -45,7 +45,7 @@ class GestionPresentacionesDialog(QDialog):
         layout.addWidget(self.lista_presentaciones)
         
         # Botón eliminar
-        btn_eliminar = QPushButton("❌ Eliminar Seleccionada")
+        btn_eliminar = QPushButton("Eliminar Seleccionada")
         btn_eliminar.clicked.connect(self.eliminar_seleccionada)
         layout.addWidget(btn_eliminar)
         

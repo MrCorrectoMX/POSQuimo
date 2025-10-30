@@ -1,53 +1,92 @@
-# PARA_NUEVAS_PRESENTACIONES.py
-from sqlalchemy import create_engine, text
+# buscar_sqlite_en_presentaciones.py
+import os
+import re
 
-engine = create_engine("sqlite:///quimo.db", echo=True)
+def buscar_conexiones_sqlite():
+    """Buscar conexiones SQLite específicas en el código de presentaciones"""
+    print("🔍 BUSCANDO CONEXIONES SQLITE EN CÓDIGO DE PRESENTACIONES")
+    print("=" * 60)
+    
+    problemas_encontrados = []
+    
+    for root, dirs, files in os.walk('.'):
+        for file in files:
+            if file.endswith('.py'):
+                filepath = os.path.join(root, file)
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    contenido = f.read()
+                    
+                    # Buscar patrones que indiquen conexión a SQLite
+                    patrones = [
+                        r'sqlite3\.connect',
+                        r'sqlite:///',
+                        r'create_engine.*sqlite',
+                        r'\.db["\']',
+                        r'quimo\.db'
+                    ]
+                    
+                    for patron in patrones:
+                        if re.search(patron, contenido, re.IGNORECASE):
+                            lineas = contenido.split('\n')
+                            for num_linea, linea in enumerate(lineas, 1):
+                                if re.search(patron, linea, re.IGNORECASE):
+                                    problemas_encontrados.append({
+                                        'archivo': filepath,
+                                        'linea': num_linea,
+                                        'codigo': linea.strip(),
+                                        'patron': patron
+                                    })
+    
+    if problemas_encontrados:
+        print("❌ SE ENCONTRARON CONEXIONES SQLITE:")
+        for problema in problemas_encontrados:
+            print(f"\n📄 Archivo: {problema['archivo']}")
+            print(f"📍 Línea {problema['linea']}: {problema['codigo']}")
+            print(f"🔍 Patrón: {problema['patron']}")
+    else:
+        print("✅ No se encontraron conexiones SQLite explícitas")
+    
+    return problemas_encontrados
 
-# FACTORES (capacidad + 10)
-FACTORES = {
-    "BARRIL 120 KG": 130,
-    "COSTAL CON ETIQUETA": 35,
-    "ENVASE ALCOHOLERO 1 L": 11,
-    "ENVASE PET 1 L": 11,
-    "ENVASE BOSTON 1 L": 11,
-    "ENVASE PET 5 L": 15,
-    "ENVASE PET 20 L": 30,
-    "ENVASE MUESTRA 250 mL": 10.25,
-    "ENVASE MUESTRA 500 mL": 10.5,
-    "BOLSA BLANCA": 11,
-    "BOLSA TRANSPARENTE": 11,
-}
+def buscar_funciones_presentaciones():
+    """Buscar funciones específicas de presentaciones"""
+    print("\n🔍 BUSCANDO FUNCIONES DE PRESENTACIONES")
+    print("=" * 60)
+    
+    funciones_presentaciones = []
+    
+    for root, dirs, files in os.walk('.'):
+        for file in files:
+            if file.endswith('.py'):
+                filepath = os.path.join(root, file)
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    contenido = f.read()
+                    
+                    # Buscar funciones relacionadas con presentaciones
+                    if 'presentacion' in contenido.lower():
+                        lineas = contenido.split('\n')
+                        for i, linea in enumerate(lineas):
+                            if 'def ' in linea and 'presentacion' in linea.lower():
+                                # Encontrar el nombre de la función
+                                match = re.search(r'def (\w+.*presentacion\w*)', linea, re.IGNORECASE)
+                                if match:
+                                    nombre_funcion = match.group(1)
+                                    funciones_presentaciones.append({
+                                        'archivo': filepath,
+                                        'funcion': nombre_funcion,
+                                        'linea': i + 1
+                                    })
+    
+    print("📋 Funciones de presentaciones encontradas:")
+    for func in funciones_presentaciones:
+        print(f"   - {func['funcion']} (en {func['archivo']}:{func['linea']})")
+    
+    return funciones_presentaciones
 
-try:
-    with engine.connect() as conn:
-        with conn.begin():
-            print("🚀 CALCULANDO PRECIOS PARA NUEVAS PRESENTACIONES...")
-            
-            # Solo calcular precios para presentaciones sin precio
-            update_query = """
-            UPDATE presentaciones 
-            SET precio_venta = ROUND(
-                (SELECT SUM(f.porcentaje * mp.costo_unitario_mp / 100) 
-                 FROM formulas f JOIN materiasprimas mp ON f.id_mp = mp.id_mp 
-                 WHERE f.id_producto = presentaciones.id_producto)
-                + (costo_envase / CASE 
-                    %s
-                    ELSE 1 END
-                ), 2)
-            WHERE precio_venta IS NULL
-            """
-            
-            # Construir los CASE para cada presentación
-            cases = []
-            for presentacion, factor in FACTORES.items():
-                cases.append(f"WHEN nombre_presentacion = '{presentacion}' THEN {factor}")
-            
-            update_query = update_query % " ".join(cases)
-            
-            filas = conn.execute(text(update_query)).rowcount
-            print(f"✅ {filas} nuevas presentaciones con precio calculado")
-
-except Exception as e:
-    print(f"❌ Error: {e}")
-
-print("🎯 EJECUTA ESTO CUANDO AGREGUE NUEVAS PRESENTACIONES")
+if __name__ == "__main__":
+    conexiones = buscar_conexiones_sqlite()
+    funciones = buscar_funciones_presentaciones()
+    
+    print(f"\n📊 RESUMEN:")
+    print(f"   Conexiones SQLite encontradas: {len(conexiones)}")
+    print(f"   Funciones de presentaciones: {len(funciones)}")
