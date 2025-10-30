@@ -3,10 +3,11 @@ import os
 import sys
 import shutil
 import platform
+from datetime import datetime
 
 def create_package(artifact_name, binary_name):
-    """Crear paquete de distribución completo"""
-    print(f"📦 Creating distribution package: {artifact_name}")
+    """Crear paquete de distribución completo - Sin emojis"""
+    print(f"Creating distribution package: {artifact_name}")
     
     # Crear carpeta de distribución
     if os.path.exists(artifact_name):
@@ -17,9 +18,9 @@ def create_package(artifact_name, binary_name):
     exe_source = f"dist/{binary_name}"
     if os.path.exists(exe_source):
         shutil.copy2(exe_source, f"{artifact_name}/{binary_name}")
-        print(f"✅ {binary_name} copied")
+        print(f"[OK] {binary_name} copied")
     else:
-        print(f"❌ Executable not found: {exe_source}")
+        print(f"[ERROR] Executable not found: {exe_source}")
         return False
     
     # Copiar archivos esenciales
@@ -34,13 +35,13 @@ def create_package(artifact_name, binary_name):
     for file in essential_files:
         if os.path.exists(file):
             shutil.copy2(file, f"{artifact_name}/{file}")
-            print(f"✅ {file} copied")
+            print(f"[OK] {file} copied")
     
     # Copiar carpeta UI
     if os.path.exists("ui"):
         shutil.copytree("ui", f"{artifact_name}/ui")
         ui_count = len([f for f in os.listdir("ui") if os.path.isfile(os.path.join("ui", f))])
-        print(f"✅ ui/ folder copied ({ui_count} files)")
+        print(f"[OK] ui/ folder copied ({ui_count} files)")
     
     # Crear scripts de instalación según la plataforma
     create_installation_scripts(artifact_name, binary_name)
@@ -48,7 +49,7 @@ def create_package(artifact_name, binary_name):
     # Crear documentación
     create_documentation(artifact_name, platform.system())
     
-    print(f"🎉 Package {artifact_name} created successfully!")
+    print(f"Package {artifact_name} created successfully!")
     return True
 
 def create_installation_scripts(artifact_name, binary_name):
@@ -80,7 +81,7 @@ echo Starting QuimoPOS...
 """
         with open(f"{artifact_name}/Install_QuimoPOS.bat", "w", encoding="utf-8") as f:
             f.write(bat_content)
-        print("✅ Install_QuimoPOS.bat created")
+        print("[OK] Install_QuimoPOS.bat created")
         
     else:
         # Script shell para Linux/macOS
@@ -94,10 +95,6 @@ echo ""
 echo "System: {platform.system()}"
 echo "Executable: {binary_name}"
 echo ""
-echo "Make sure you have:"
-echo "- PostgreSQL installed and running" 
-echo "- Database 'quimo_bd_new' created"
-echo ""
 echo "Making executable executable..."
 chmod +x ./{binary_name}
 echo ""
@@ -108,16 +105,18 @@ echo "Starting QuimoPOS..."
             f.write(sh_content)
         # Hacer ejecutable
         os.chmod(f"{artifact_name}/Install_QuimoPOS.sh", 0o755)
-        print("✅ Install_QuimoPOS.sh created")
+        print("[OK] Install_QuimoPOS.sh created")
 
 def create_documentation(artifact_name, system):
     """Crear documentación del paquete"""
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
     doc_content = f"""QuimoPOS - Point of Sale System
 ===============================
 
 Package: {artifact_name}
 System: {system}
-Build Date: {os.popen('date').read().strip()}
+Build Date: {current_time}
 
 INSTRUCTIONS:
 1. Ensure PostgreSQL is installed and running
@@ -128,11 +127,11 @@ INSTRUCTIONS:
    - Linux/macOS: Run ./Install_QuimoPOS.sh
 
 FILES INCLUDED:
-- {artifact_name}/{binary_name if 'binary_name' in locals() else 'Executable'}: Main application
+- Main application executable
 - config.ini: Database configuration
 - database_manager.py: Database handler
 - ui/: User interface files
-- productos.py, lotes.py, presentaciones.py: Application modules
+- Application modules
 
 SUPPORT:
 For issues with the application, check:
@@ -145,7 +144,7 @@ Thank you for using QuimoPOS!
     
     with open(f"{artifact_name}/README.txt", "w", encoding="utf-8") as f:
         f.write(doc_content)
-    print("✅ README.txt created")
+    print("[OK] README.txt created")
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:

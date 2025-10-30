@@ -5,8 +5,8 @@ import platform
 import subprocess
 
 def build_for_github():
-    """Script de construcción optimizado para GitHub Actions"""
-    print(f"🏗️ Building QuimoPOS for {platform.system()} on GitHub Actions")
+    """Script de construcción optimizado para GitHub Actions - Sin emojis"""
+    print(f"Building QuimoPOS for {platform.system()} on GitHub Actions")
     
     # Configuración
     app_name = "QuimoPOS"
@@ -26,16 +26,16 @@ def build_for_github():
         "presentaciones.py"
     ]
     
-    print("🔍 Verifying essential files...")
+    print("Verifying essential files...")
     for item in essential_files:
         if os.path.exists(item):
             if os.path.isdir(item):
                 file_count = len([f for f in os.listdir(item) if os.path.isfile(os.path.join(item, f))])
-                print(f"   ✅ {item} ({file_count} files)")
+                print(f"   [OK] {item} ({file_count} files)")
             else:
-                print(f"   ✅ {item}")
+                print(f"   [OK] {item}")
         else:
-            print(f"   ⚠ {item} not found - this might cause issues")
+            print(f"   [WARNING] {item} not found")
     
     # Comando PyInstaller optimizado para CI
     cmd = [
@@ -59,17 +59,17 @@ def build_for_github():
         "main.py"
     ]
     
-    print("🚀 Running PyInstaller...")
+    print("Running PyInstaller...")
     try:
         # Ejecutar con timeout de 10 minutos
         result = subprocess.run(cmd, check=True, timeout=600)
-        print("✅ Build completed successfully!")
+        print("Build completed successfully!")
         return True
     except subprocess.TimeoutExpired:
-        print("❌ Build timed out after 10 minutes")
+        print("Build timed out after 10 minutes")
         return False
     except subprocess.CalledProcessError as e:
-        print(f"❌ Build failed with error: {e}")
+        print(f"Build failed with error: {e}")
         return False
 
 if __name__ == "__main__":
