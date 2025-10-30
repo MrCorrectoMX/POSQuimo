@@ -595,22 +595,32 @@ class POSWindow(QWidget):
         return round(precio_calculado, 2)
 
     def _establecer_precio_manual_presentacion(self, product_name, presentacion_nombre):
-        """Establece un precio manual para una presentación específica"""
+        """Establece un precio manual para una presentación específica - SIN ERROR DE AMBIGÜEDAD"""
         try:
             with self.engine.connect() as conn:
-                # Obtener precio actual
+                # SOLUCIÓN INGENIOSA: Primero obtener el ID del producto, luego buscar en presentaciones
+                # Esto evita el JOIN problemático
+                
+                # 1. Obtener el ID del producto
+                query_producto_id = text("SELECT id_producto FROM productos WHERE nombre_producto = :producto")
+                producto_id = conn.execute(query_producto_id, {"producto": product_name}).scalar()
+                
+                if not producto_id:
+                    QMessageBox.warning(self, "Error", f"No se encontró el producto '{product_name}'")
+                    return
+                
+                # 2. Obtener precio actual usando solo el ID (sin JOIN ambiguo)
                 query_precio_actual = text("""
                     SELECT precio_venta 
-                    FROM presentaciones p
-                    JOIN productos pr ON p.id_producto = pr.id_producto
-                    WHERE pr.nombre_producto = :producto AND p.nombre_presentacion = :presentacion
+                    FROM presentaciones 
+                    WHERE id_producto = :producto_id AND nombre_presentacion = :presentacion
                 """)
                 precio_actual = conn.execute(query_precio_actual, {
-                    "producto": product_name, 
+                    "producto_id": producto_id, 
                     "presentacion": presentacion_nombre
                 }).scalar()
                 
-                # Pedir nuevo precio al usuario
+                # Pedir nuevo precio al usuario (MISMA FUNCIONALIDAD)
                 nuevo_precio, ok = QInputDialog.getDouble(
                     self,
                     f"Precio Manual - {presentacion_nombre}",
@@ -622,20 +632,15 @@ class POSWindow(QWidget):
                 )
                 
                 if ok:
-                    # Actualizar en base de datos
+                    # Actualizar en base de datos (MISMA FUNCIONALIDAD)
                     query_update = text("""
                         UPDATE presentaciones 
                         SET precio_venta = :precio
-                        WHERE id_presentacion = (
-                            SELECT p.id_presentacion
-                            FROM presentaciones p
-                            JOIN productos pr ON p.id_producto = pr.id_producto
-                            WHERE pr.nombre_producto = :producto AND p.nombre_presentacion = :presentacion
-                        )
+                        WHERE id_producto = :producto_id AND nombre_presentacion = :presentacion
                     """)
                     conn.execute(query_update, {
                         "precio": nuevo_precio,
-                        "producto": product_name,
+                        "producto_id": producto_id,
                         "presentacion": presentacion_nombre
                     })
                     conn.commit()
@@ -646,31 +651,34 @@ class POSWindow(QWidget):
                         f"✅ Precio manual establecido:\n\n{product_name} - {presentacion_nombre}\n💵 ${nuevo_precio:.2f}"
                     )
                     
-                    # Recargar presentaciones si están visibles
+                    # Recargar presentaciones si están visibles (MISMA FUNCIONALIDAD)
                     if self.current_product_with_presentaciones == product_name:
                         self._ocultar_presentaciones()
                         self._mostrar_presentaciones("productos", product_name)
-                        
+                            
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo establecer el precio manual: {e}")
 
     def _volver_a_calculo_automatico_presentacion(self, product_name, presentacion_nombre):
-        """Vuelve al cálculo automático para una presentación"""
+        """Vuelve al cálculo automático para una presentación - SIN ERROR DE AMBIGÜEDAD"""
         try:
             with self.engine.connect() as conn:
-                # Establecer precio_venta como NULL
+                # SOLUCIÓN INGENIOSA: Primero obtener el ID del producto
+                query_producto_id = text("SELECT id_producto FROM productos WHERE nombre_producto = :producto")
+                producto_id = conn.execute(query_producto_id, {"producto": product_name}).scalar()
+                
+                if not producto_id:
+                    QMessageBox.warning(self, "Error", f"No se encontró el producto '{product_name}'")
+                    return
+                
+                # Establecer precio_venta como NULL (sin JOIN ambiguo)
                 query_update = text("""
                     UPDATE presentaciones 
                     SET precio_venta = NULL
-                    WHERE id_presentacion = (
-                        SELECT p.id_presentacion
-                        FROM presentaciones p
-                        JOIN productos pr ON p.id_producto = pr.id_producto
-                        WHERE pr.nombre_producto = :producto AND p.nombre_presentacion = :presentacion
-                    )
+                    WHERE id_producto = :producto_id AND nombre_presentacion = :presentacion
                 """)
                 conn.execute(query_update, {
-                    "producto": product_name,
+                    "producto_id": producto_id,
                     "presentacion": presentacion_nombre
                 })
                 conn.commit()
@@ -681,7 +689,7 @@ class POSWindow(QWidget):
                     f"Cálculo automático activado:\n\n{product_name} - {presentacion_nombre}\n\nEl precio se calculará automáticamente según la fórmula."
                 )
                 
-                # Recargar presentaciones si están visibles
+                # Recargar presentaciones si están visibles (MISMA FUNCIONALIDAD)
                 if self.current_product_with_presentaciones == product_name:
                     self._ocultar_presentaciones()
                     self._mostrar_presentaciones("productos", product_name)
