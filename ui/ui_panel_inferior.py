@@ -250,67 +250,37 @@ class PanelInferiorRedisenado(QWidget):
 
 
     def _guardar_presentaciones_postgresql(self, producto_id, nuevas_presentaciones, presentaciones_actuales):
-        """Guarda presentaciones usando PostgreSQL - REEMPLAZA SQLite"""
+        """Guarda presentaciones usando PostgreSQL - VERSIÓN SIMPLIFICADA"""
         try:
             with self.engine.connect() as conn:
-                with conn.begin() as trans:
-                    # Identificar presentaciones a eliminar
-                    nombres_actuales = {pres['nombre_presentacion'] for pres in presentaciones_actuales}
-                    nombres_nuevos = {pres['nombre_presentacion'] for pres in nuevas_presentaciones}
-                    
-                    presentaciones_a_eliminar = nombres_actuales - nombres_nuevos
-                    for nombre_eliminar in presentaciones_a_eliminar:
-                        conn.execute(
-                            text("DELETE FROM presentaciones WHERE id_producto = :id_producto AND nombre_presentacion = :nombre_presentacion"),
-                            {"id_producto": producto_id, "nombre_presentacion": nombre_eliminar}
-                        )
-
-                    # Insertar o actualizar presentaciones
-                    for pres in nuevas_presentaciones:
-                        # Verificar si ya existe
-                        query_existe = text("""
-                            SELECT id_presentacion FROM presentaciones 
-                            WHERE id_producto = :id_producto AND nombre_presentacion = :nombre_presentacion
-                        """)
-                        existe = conn.execute(query_existe, {
-                            "id_producto": producto_id, 
-                            "nombre_presentacion": pres['nombre_presentacion']
-                        }).fetchone()
-
-                        if existe:
-                            # Actualizar
-                            conn.execute(
-                                text("""
-                                    UPDATE presentaciones 
-                                    SET factor = :factor, id_envase = :id_envase, costo_envase = :costo_envase
-                                    WHERE id_presentacion = :id_presentacion
-                                """),
-                                {
-                                    "factor": pres['factor'],
-                                    "id_envase": pres['id_envase'],
-                                    "costo_envase": pres['costo_envase'],
-                                    "id_presentacion": existe[0]
-                                }
-                            )
-                        else:
-                            # Insertar nuevo
-                            conn.execute(
-                                text("""
-                                    INSERT INTO presentaciones (id_producto, nombre_presentacion, factor, id_envase, costo_envase)
-                                    VALUES (:id_producto, :nombre_presentacion, :factor, :id_envase, :costo_envase)
-                                """),
-                                {
-                                    "id_producto": producto_id,
-                                    "nombre_presentacion": pres['nombre_presentacion'],
-                                    "factor": pres['factor'],
-                                    "id_envase": pres['id_envase'],
-                                    "costo_envase": pres['costo_envase']
-                                }
-                            )
+                # **SOLUCIÓN SIMPLE**: Eliminar todas e insertar nuevas
+                conn.execute(
+                    text("DELETE FROM presentaciones WHERE id_producto = :id_producto"),
+                    {"id_producto": producto_id}
+                )
                 
-                QMessageBox.information(self, "Éxito", "Presentaciones actualizadas correctamente.")
-                self.cargar_datos_desde_db()
+                # Insertar todas las nuevas presentaciones
+                for pres in nuevas_presentaciones:
+                    conn.execute(
+                        text("""
+                            INSERT INTO presentaciones (id_producto, nombre_presentacion, factor, id_envase, costo_envase)
+                            VALUES (:id_producto, :nombre_presentacion, :factor, :id_envase, :costo_envase)
+                        """),
+                        {
+                            "id_producto": producto_id,
+                            "nombre_presentacion": pres['nombre_presentacion'],
+                            "factor": pres['factor'],
+                            "id_envase": pres['id_envase'],
+                            "costo_envase": pres['costo_envase']
+                        }
+                    )
                 
+                # Commit explícito
+                conn.commit()
+            
+            QMessageBox.information(self, "Éxito", "Presentaciones actualizadas correctamente.")
+            self.cargar_datos_desde_db()
+            
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudieron guardar las presentaciones: {e}")
 
@@ -546,3 +516,134 @@ class PanelInferiorRedisenado(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo exportar el reporte: {e}")
 
+
+    def _ver_detalle_calculo_presentacion(self, product_name, presentacion_nombre, factor, costo_envase):
+        """Muestra el detalle del cálculo automático de una presentación"""
+        try:
+            with self.engine.connect() as conn:
+                # Obtener precio base del producto
+                query_precio_base = text("SELECT precio_venta FROM productos WHERE nombre_producto = :nombre")
+                precio_base = conn.execute(query_precio_base, {"nombre": product_name}).scalar() or 0
+                
+                # Calcular precio según la fórmula
+                precio_calculado = self._calcular_precio_presentacion(presentacion_nombre, precio_base, costo_envase, factor)
+                
+                # Mostrar detalles
+                detalle = f"""
+                DETALLE DE CÁLCULO AUTOMÁTICO
+                
+                Producto: {product_name}
+                Presentación: {presentacion_nombre}
+                
+                PARÁMETROS:
+                - Precio base (por unidad): ${precio_base:.2f}
+                - Factor de conversión: {factor}
+                - Costo de envase: ${costo_envase:.2f}
+                
+                CÁLCULO:
+                - Costo producto en presentación: ${precio_base:.2f} × {factor} = ${precio_base * factor:.2f}
+                - Costo envase: ${costo_envase:.2f}
+                
+                PRECIO CALCULADO: ${precio_calculado:.2f}
+                
+                NOTA: Este precio se calcula automáticamente según la fórmula.
+                Puedes establecer un precio manual si lo deseas.
+                """
+                
+                QMessageBox.information(self, f"Detalle de Cálculo - {presentacion_nombre}", detalle)
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo obtener el detalle del cálculo: {e}")
+
+
+
+    def _guardar_presentaciones_sin_secuencia(self, producto_id, nuevas_presentaciones, product_name):
+        """Guarda presentaciones sin depender de la secuencia - SOLUCIÓN DE EMERGENCIA"""
+        try:
+            with self.engine.connect() as conn:
+                # **SOLUCIÓN DE EMERGENCIA**: Usar una estrategia diferente
+                
+                # Paso 1: Obtener los IDs actuales de las presentaciones de este producto
+                query_current_ids = text("""
+                    SELECT id_presentacion, nombre_presentacion 
+                    FROM presentaciones 
+                    WHERE id_producto = :id_p
+                """)
+                current_presentations = conn.execute(query_current_ids, {"id_p": producto_id}).fetchall()
+                
+                # Crear un mapeo de nombre a ID
+                name_to_id = {name: id_val for id_val, name in current_presentations}
+                
+                # Paso 2: Procesar cada presentación
+                for pres in nuevas_presentaciones:
+                    pres_name = pres['nombre_presentacion']
+                    
+                    if pres_name in name_to_id:
+                        # UPDATE de la presentación existente
+                        query_update = text("""
+                            UPDATE presentaciones 
+                            SET factor = :factor, id_envase = :id_envase, costo_envase = :costo_envase
+                            WHERE id_presentacion = :id_pres
+                        """)
+                        conn.execute(query_update, {
+                            "factor": pres['factor'],
+                            "id_envase": pres['id_envase'],
+                            "costo_envase": pres['costo_envase'],
+                            "id_pres": name_to_id[pres_name]
+                        })
+                    else:
+                        # INSERT de nueva presentación (dejando que PostgreSQL maneje el ID)
+                        try:
+                            query_insert = text("""
+                                INSERT INTO presentaciones (id_producto, nombre_presentacion, factor, id_envase, costo_envase)
+                                VALUES (:id_p, :nombre, :factor, :id_envase, :costo_envase)
+                            """)
+                            conn.execute(query_insert, {
+                                "id_p": producto_id,
+                                "nombre": pres_name,
+                                "factor": pres['factor'],
+                                "id_envase": pres['id_envase'],
+                                "costo_envase": pres['costo_envase']
+                            })
+                        except Exception as insert_error:
+                            if "duplicate key" in str(insert_error).lower():
+                                # Si hay duplicado, hacer UPDATE en su lugar
+                                print(f"⚠️  Duplicado detectado en inserción, haciendo UPDATE: {pres_name}")
+                                # Buscar el ID del duplicado
+                                query_find_dup = text("""
+                                    SELECT id_presentacion FROM presentaciones 
+                                    WHERE id_producto = :id_p AND nombre_presentacion = :nombre
+                                    LIMIT 1
+                                """)
+                                dup_id = conn.execute(query_find_dup, {
+                                    "id_p": producto_id, 
+                                    "nombre": pres_name
+                                }).scalar()
+                                
+                                if dup_id:
+                                    query_update = text("""
+                                        UPDATE presentaciones 
+                                        SET factor = :factor, id_envase = :id_envase, costo_envase = :costo_envase
+                                        WHERE id_presentacion = :id_pres
+                                    """)
+                                    conn.execute(query_update, {
+                                        "factor": pres['factor'],
+                                        "id_envase": pres['id_envase'],
+                                        "costo_envase": pres['costo_envase'],
+                                        "id_pres": dup_id
+                                    })
+                
+                # Paso 3: Eliminar presentaciones que ya no están en la lista nueva
+                new_names = {pres['nombre_presentacion'] for pres in nuevas_presentaciones}
+                for current_id, current_name in current_presentations:
+                    if current_name not in new_names:
+                        query_delete = text("DELETE FROM presentaciones WHERE id_presentacion = :id_pres")
+                        conn.execute(query_delete, {"id_pres": current_id})
+                
+                conn.commit()
+                
+            QMessageBox.information(self, "Éxito", "Presentaciones actualizadas correctamente.")
+            self._populate_grids()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudieron guardar las presentaciones: {str(e)}")
