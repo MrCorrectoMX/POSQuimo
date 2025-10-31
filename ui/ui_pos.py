@@ -1871,6 +1871,15 @@ class POSWindow(QWidget):
             menu.addAction(accion_eliminar_reventa)
 
         elif table_name == "productos":
+
+        
+            # OPCIÓN: Agregar Producto Nuevo
+            accion_agregar_nuevo = QAction(" Agregar Producto Nuevo", self)
+            accion_agregar_nuevo.triggered.connect(self._agregar_producto_nuevo)
+            menu.addAction(accion_agregar_nuevo)
+
+            menu.addSeparator()  # Separador visual
+            
             # Para productos normales, ofrecer opciones de fórmula y presentaciones
             accion_formula = QAction("Modificar Fórmula", self)
             accion_formula.triggered.connect(functools.partial(self._modificar_formula, product_name))
@@ -1907,6 +1916,12 @@ class POSWindow(QWidget):
                 functools.partial(self._eliminar_producto, table_name, product_name)
             )
             menu.addAction(accion_eliminar)
+
+            # En cualquier parte del menú, añade:
+            menu.addSeparator()
+            accion_reparar_todo = QAction(" 🔧 Reparar Todas las Secuencias (Una vez)", self)
+            accion_reparar_todo.triggered.connect(self._reparar_todas_secuencias)
+            menu.addAction(accion_reparar_todo)
 
         # --- OPCIÓN UNIVERSAL: ACTUALIZAR STOCK/VISTA ---
         menu.addSeparator()
@@ -2388,6 +2403,7 @@ class POSWindow(QWidget):
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo completar la compra: {e}")
+
 
 
     def _agregar_materia_prima(self):
@@ -3190,7 +3206,262 @@ class POSWindow(QWidget):
             self._agregar_producto_con_cantidad(table_name, product_name)
 
 
+    def _agregar_producto_nuevo(self):
+        """Flujo completo para agregar un producto nuevo con fórmula y presentaciones"""
+        try:
+            
+            # Paso 1: Datos básicos del producto
+            dialogo_basico = AgregarProductoDialog(self)
+            if dialogo_basico.exec_() != QDialog.Accepted:
+                return
+            
+            datos_basicos = dialogo_basico.get_datos()
+            nombre_producto = datos_basicos['nombre']
+            
+            # Paso 2: Definir la fórmula del producto
+            if not self._definir_formula_producto(nombre_producto, datos_basicos):
+                return  # Usuario canceló la fórmula
+            
+            # Paso 3: Configurar presentaciones
+            if not self._configurar_presentaciones_producto(nombre_producto):
+                return  # Usuario canceló las presentaciones
+            
+            # Confirmación final
+            QMessageBox.information(self, "✅ Producto Creado", 
+                                f"El producto '{nombre_producto}' ha sido creado exitosamente.\n\n"
+                                f"• Fórmula definida ✓\n"
+                                f"• Presentaciones configuradas ✓\n\n"
+                                f"Ya puedes producir y vender este producto.")
+            
+            # Actualizar la vista
+            self._populate_grids()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo crear el producto: {str(e)}")
 
+    def _definir_formula_producto(self, nombre_producto, datos_basicos):
+        """Define la fórmula del producto nuevo"""
+        try:
+            with self.engine.connect() as conn:
+                # Obtener materias primas disponibles
+                query_mps = text("SELECT nombre_mp FROM materiasprimas ORDER BY nombre_mp")
+                materias_primas = [row[0] for row in conn.execute(query_mps).fetchall()]
+                
+                if not materias_primas:
+                    QMessageBox.warning(self, "Sin Materias Primas", 
+                                    "No hay materias primas disponibles.\n\n"
+                                    "Debes agregar materias primas antes de crear productos.")
+                    return False
+            
+            # Mostrar diálogo de fórmula (vacío inicialmente)
+            dialogo_formula = FormulaDialog(nombre_producto, materias_primas, [], self)
+            
+            if dialogo_formula.exec_() == QDialog.Accepted:
+                nueva_formula = dialogo_formula.get_formula()
+                
+                if nueva_formula is None:
+                    return False  # Error en la fórmula
+                
+                # Guardar el producto y su fórmula
+                return self._guardar_producto_y_formula(nombre_producto, nueva_formula, datos_basicos)
+            else:
+                return False  # Usuario canceló
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo definir la fórmula: {str(e)}")
+            return False
+
+    def _guardar_producto_y_formula(self, nombre_producto, formula, datos_basicos):
+        """Guarda el producto en la base de datos con su fórmula"""
+        try:
+            with self.engine.connect() as conn:
+                with conn.begin() as trans:
+                    # Insertar el producto
+                    query_insert_producto = text("""
+                        INSERT INTO productos (nombre_producto, unidad_medida_producto, area_producto, 
+                                            estatus_producto, cantidad_producto, precio_venta)
+                        VALUES (:nombre, :unidad, :area, 1, 0, :precio)
+                        RETURNING id_producto
+                    """)
+                    result = conn.execute(query_insert_producto, {
+                        "nombre": nombre_producto,
+                        "unidad": datos_basicos['unidad'],
+                        "area": datos_basicos['area'],
+                        "precio": datos_basicos['precio_venta']
+                    })
+                    
+                    producto_id = result.scalar()
+                    
+                    # Insertar la fórmula
+                    for ingrediente in formula:
+                        # Obtener ID de la materia prima
+                        query_id_mp = text("SELECT id_mp FROM materiasprimas WHERE nombre_mp = :nombre")
+                        id_mp = conn.execute(query_id_mp, {"nombre": ingrediente["nombre_mp"]}).scalar()
+                        
+                        if id_mp:
+                            query_insert_formula = text("""
+                                INSERT INTO formulas (id_producto, id_mp, porcentaje)
+                                VALUES (:id_p, :id_m, :porc)
+                            """)
+                            conn.execute(query_insert_formula, {
+                                "id_p": producto_id,
+                                "id_m": id_mp,
+                                "porc": ingrediente["porcentaje"]
+                            })
+                    
+                    return True
+                    
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo guardar el producto: {str(e)}")
+            return False
+
+    def _configurar_presentaciones_producto(self, nombre_producto):
+        """Configura las presentaciones del producto nuevo"""
+        try:
+            with self.engine.connect() as conn:
+                # Obtener el ID del producto recién creado
+                query_id = text("SELECT id_producto FROM productos WHERE nombre_producto = :nombre")
+                producto_id = conn.execute(query_id, {"nombre": nombre_producto}).scalar()
+                
+                if not producto_id:
+                    QMessageBox.critical(self, "Error", "No se encontró el producto recién creado.")
+                    return False
+                
+                # Obtener envases disponibles
+                query_envases = text("""
+                    SELECT id_envase, nombre_envase, costo_envase
+                    FROM envases_etiquetas
+                    ORDER BY nombre_envase
+                """)
+                envases_disponibles_raw = conn.execute(query_envases).fetchall()
+                envases_disponibles = [
+                    {
+                        'id_envase': row[0],
+                        'nombre_envase': row[1],
+                        'costo_envase': row[2] or 0.0
+                    }
+                    for row in envases_disponibles_raw
+                ]
+            
+            # Mostrar diálogo de presentaciones (vacío inicialmente)
+            dialogo_presentaciones = GestionPresentacionesDialog(
+                nombre_producto, 
+                producto_id, 
+                [],  # No hay presentaciones iniciales
+                envases_disponibles, 
+                self
+            )
+            
+            if dialogo_presentaciones.exec_() == QDialog.Accepted:
+                QMessageBox.information(self, "Presentaciones Configuradas", 
+                                    "Las presentaciones del producto han sido configuradas correctamente.")
+                return True
+            else:
+                # El usuario canceló, pero el producto ya está creado
+                respuesta = QMessageBox.question(
+                    self,
+                    "Presentaciones No Configuradas",
+                    "No se configuraron presentaciones para este producto.\n\n"
+                    "¿Deseas configurarlas más tarde desde el menú contextual?",
+                    QMessageBox.Yes | QMessageBox.No
+                )
+                return True  # El producto se creó igual, solo sin presentaciones
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudieron configurar las presentaciones: {str(e)}")
+            return True  # Continuamos aunque falle las presentaciones
+
+
+    def _guardar_producto_y_formula(self, nombre_producto, formula, datos_basicos):
+        """Guarda el producto en la base de datos con su fórmula - VERSIÓN CORREGIDA"""
+        try:
+            with self.engine.connect() as conn:
+                with conn.begin() as trans:
+                    # **PASO 1: Obtener el próximo ID disponible manualmente**
+                    query_max_id = text("SELECT COALESCE(MAX(id_producto), 0) FROM productos")
+                    max_id = conn.execute(query_max_id).scalar()
+                    next_id = max_id + 1
+                    
+                    # **PASO 2: Insertar producto con ID explícito**
+                    query_insert_producto = text("""
+                        INSERT INTO productos (id_producto, nombre_producto, unidad_medida_producto, area_producto, 
+                                            estatus_producto, cantidad_producto, precio_venta)
+                        VALUES (:id, :nombre, :unidad, :area, 1, 0, :precio)
+                        RETURNING id_producto
+                    """)
+                    result = conn.execute(query_insert_producto, {
+                        "id": next_id,
+                        "nombre": nombre_producto,
+                        "unidad": datos_basicos['unidad'],
+                        "area": datos_basicos['area'],
+                        "precio": datos_basicos['precio_venta']
+                    })
+                    
+                    producto_id = result.scalar()
+                    
+                    # **PASO 3: Insertar la fórmula**
+                    for ingrediente in formula:
+                        # Obtener ID de la materia prima
+                        query_id_mp = text("SELECT id_mp FROM materiasprimas WHERE nombre_mp = :nombre")
+                        id_mp = conn.execute(query_id_mp, {"nombre": ingrediente["nombre_mp"]}).scalar()
+                        
+                        if id_mp:
+                            query_insert_formula = text("""
+                                INSERT INTO formulas (id_producto, id_mp, porcentaje)
+                                VALUES (:id_p, :id_m, :porc)
+                            """)
+                            conn.execute(query_insert_formula, {
+                                "id_p": producto_id,
+                                "id_m": id_mp,
+                                "porc": ingrediente["porcentaje"]
+                            })
+                    
+                    # **PASO 4: Resetear la secuencia al máximo ID + 1**
+                    try:
+                        query_reset_seq = text("SELECT setval('productos_id_producto_seq', :max_id, true)")
+                        conn.execute(query_reset_seq, {"max_id": next_id})
+                    except Exception as seq_error:
+                        print(f"⚠️  No se pudo resetear la secuencia de productos: {seq_error}")
+                    
+                    return True
+                    
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo guardar el producto: {str(e)}")
+            return False
+
+
+    def _reparar_todas_secuencias(self):
+        """Repara TODAS las secuencias desincronizadas - EJECUTAR UNA SOLA VEZ"""
+        try:
+            with self.engine.connect() as conn:
+                # Reparar secuencia de productos
+                query_max_productos = text("SELECT COALESCE(MAX(id_producto), 1) FROM productos")
+                max_productos = conn.execute(query_max_productos).scalar()
+                conn.execute(text("SELECT setval('productos_id_producto_seq', :max_id, true)"), 
+                        {"max_id": max_productos})
+                
+                # Reparar secuencia de productosreventa
+                query_max_reventa = text("SELECT COALESCE(MAX(id_prev), 1) FROM productosreventa")
+                max_reventa = conn.execute(query_max_reventa).scalar()
+                conn.execute(text("SELECT setval('productosreventa_id_prev_seq', :max_id, true)"), 
+                        {"max_id": max_reventa})
+                
+                # Reparar secuencia de presentaciones
+                query_max_presentaciones = text("SELECT COALESCE(MAX(id_presentacion), 1) FROM presentaciones")
+                max_presentaciones = conn.execute(query_max_presentaciones).scalar()
+                conn.execute(text("SELECT setval('presentaciones_id_presentacion_seq', :max_id, true)"), 
+                        {"max_id": max_presentaciones})
+                
+                conn.commit()
+                
+                QMessageBox.information(self, "✅ Todas las Secuencias Reparadas", 
+                                    f"Todas las secuencias han sido reparadas:\n\n"
+                                    f"• Productos: {max_productos}\n"
+                                    f"• Productos Reventa: {max_reventa}\n"
+                                    f"• Presentaciones: {max_presentaciones}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudieron reparar las secuencias: {str(e)}")
 
 
 class ModificarLoteDialog(QDialog):
@@ -3918,3 +4189,90 @@ class DialogoProducirProducto(QDialog):
             self.spin_cantidad.value(),
             self.spin_precio_venta.value()
         )
+
+
+
+class AgregarProductoDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Agregar Producto Nuevo")
+        self.setFixedWidth(400)
+        
+        layout = QVBoxLayout(self)
+        
+        # Nombre del producto
+        layout.addWidget(QLabel("Nombre del producto:"))
+        self.nombre_edit = QLineEdit()
+        self.nombre_edit.setPlaceholderText("Ej: Jabón Líquido Multiusos")
+        layout.addWidget(self.nombre_edit)
+        
+        # Unidad de medida
+        layout.addWidget(QLabel("Unidad de medida base:"))
+        self.unidad_combo = QComboBox()
+        self.unidad_combo.addItems(["KG", "L", "ML", "G", "PIEZA"])
+        self.unidad_combo.setEditable(True)
+        layout.addWidget(self.unidad_combo)
+        
+        # Área de producción
+        layout.addWidget(QLabel("Área de producción:"))
+        self.area_combo = QComboBox()
+        self.area_combo.addItems(["Quimo", "Quimo Clean"])
+        layout.addWidget(self.area_combo)
+        
+        # Precio de venta inicial (opcional)
+        layout.addWidget(QLabel("Precio de venta inicial (opcional):"))
+        self.precio_spin = QDoubleSpinBox()
+        self.precio_spin.setMinimum(0)
+        self.precio_spin.setMaximum(100000)
+        self.precio_spin.setPrefix("$ ")
+        self.precio_spin.setValue(0)
+        layout.addWidget(self.precio_spin)
+        
+        # Información
+        info_label = QLabel("💡 Después de agregar los datos básicos, podrás:\n1. Definir la fórmula del producto\n2. Configurar sus presentaciones")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("background-color: #e3f2fd; padding: 8px; border-radius: 4px;")
+        layout.addWidget(info_label)
+        
+        # Botones
+        btn_layout = QHBoxLayout()
+        btn_cancelar = QPushButton("Cancelar")
+        btn_siguiente = QPushButton("Siguiente → Definir Fórmula")
+        btn_siguiente.setStyleSheet("background-color: #2196F3; color: white;")
+        
+        btn_cancelar.clicked.connect(self.reject)
+        btn_siguiente.clicked.connect(self.verificar_datos)
+        
+        btn_layout.addWidget(btn_cancelar)
+        btn_layout.addWidget(btn_siguiente)
+        layout.addLayout(btn_layout)
+    
+    def verificar_datos(self):
+        nombre = self.nombre_edit.text().strip()
+        
+        if not nombre:
+            QMessageBox.warning(self, "Error", "El nombre del producto es obligatorio.")
+            return
+        
+        # Verificar si ya existe un producto con ese nombre
+        try:
+            with self.parent().engine.connect() as conn:
+                query = text("SELECT COUNT(*) FROM productos WHERE nombre_producto = :nombre")
+                existe = conn.execute(query, {"nombre": nombre}).scalar()
+                if existe > 0:
+                    QMessageBox.warning(self, "Producto Existente", 
+                                      f"Ya existe un producto con el nombre '{nombre}'.\nPor favor usa un nombre diferente.")
+                    return
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo verificar el producto: {e}")
+            return
+        
+        self.accept()
+    
+    def get_datos(self):
+        return {
+            'nombre': self.nombre_edit.text().strip(),
+            'unidad': self.unidad_combo.currentText(),
+            'area': self.area_combo.currentText(),
+            'precio_venta': self.precio_spin.value()
+        }
