@@ -443,14 +443,51 @@ class POSWindow(QWidget):
         if hasattr(self, '_cantidad_pendiente'):
             del self._cantidad_pendiente
 
+    def _diagnosticar_secuencia_presentaciones(self):
+        """Diagnóstico para ver el estado actual de la secuencia"""
+        try:
+            with self.engine.connect() as conn:
+                # 1. Ver el máximo ID actual en la tabla
+                query_max_id = text("SELECT MAX(id_presentacion) FROM presentaciones")
+                max_id = conn.execute(query_max_id).scalar()
+                
+                # 2. Ver el próximo valor de la secuencia
+                query_next_val = text("SELECT nextval('presentaciones_id_presentacion_seq')")
+                next_val = conn.execute(query_next_val).scalar()
+                
+                # 3. Ver el valor actual de la secuencia
+                query_curr_val = text("SELECT currval('presentaciones_id_presentacion_seq')")
+                try:
+                    curr_val = conn.execute(query_curr_val).scalar()
+                except:
+                    curr_val = "No disponible"
+                
+                # 4. Ver cuántas presentaciones tiene el producto 121
+                query_count_121 = text("SELECT COUNT(*) FROM presentaciones WHERE id_producto = 121")
+                count_121 = conn.execute(query_count_121).scalar()
+                
+                diagnostico = f"""
+                🔍 DIAGNÓSTICO DE SECUENCIA:
+                
+                Máximo ID en tabla: {max_id}
+                Próximo valor de secuencia: {next_val}
+                Valor actual de secuencia: {curr_val}
+                Presentaciones para producto 121: {count_121}
+                
+                📊 ESTADO: {"❌ PROBLEMA - Secuencia desincronizada" if next_val <= max_id else "✅ OK - Secuencia sincronizada"}
+                """
+                
+                QMessageBox.information(self, "Diagnóstico", diagnostico)
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo realizar el diagnóstico: {str(e)}")
+
 
     # En ui_pos.py, añadir este nuevo método
     # En ui_pos.py, después del método _modificar_formula
     def _gestionar_presentaciones(self, product_name):
         """Abre el diálogo para gestionar presentaciones - VERSIÓN DEFINITIVA CON DIAGNÓSTICO"""
         try:
-            # Primero hacer diagnóstico
-            self._diagnosticar_secuencia_presentaciones()
             
             with self.engine.connect() as conn:
                 # 1. Obtener el ID del producto
